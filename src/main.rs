@@ -66,6 +66,9 @@ mod health;
 mod heartbeat;
 mod hooks;
 mod identity;
+mod instance_registry {
+    pub use multiclaw::instance_registry::*;
+}
 mod integrations;
 mod memory;
 mod migration;
@@ -126,6 +129,10 @@ enum EstopLevelArg {
 struct Cli {
     #[arg(long, global = true)]
     config_dir: Option<String>,
+
+    /// Instance ID in cluster mode (or set MULTICLAW_INSTANCE). Ignored in single-instance mode.
+    #[arg(long, global = true)]
+    instance: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -748,7 +755,7 @@ async fn main() -> Result<()> {
     }
 
     // All other commands need config loaded first
-    let mut config = Config::load_or_init().await?;
+    let mut config = Config::load_or_init(cli.instance.as_deref()).await?;
     config.apply_env_overrides();
     observability::runtime_trace::init_from_config(&config.observability, &config.workspace_dir);
     if config.security.otp.enabled {
@@ -972,7 +979,7 @@ async fn main() -> Result<()> {
             service_init,
         } => {
             let init_system = service_init.parse()?;
-            service::handle_command(&service_command, &config, init_system)
+            service::handle_command(&service_command, &config, init_system, cli.instance.as_deref())
         }
 
         Commands::Doctor { doctor_command } => match doctor_command {

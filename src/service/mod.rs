@@ -93,9 +93,10 @@ pub fn handle_command(
     command: &crate::ServiceCommands,
     config: &Config,
     init_system: InitSystem,
+    instance_id: Option<&str>,
 ) -> Result<()> {
     match command {
-        crate::ServiceCommands::Install => install(config, init_system),
+        crate::ServiceCommands::Install => install(config, init_system, instance_id),
         crate::ServiceCommands::Start => start(config, init_system),
         crate::ServiceCommands::Stop => stop(config, init_system),
         crate::ServiceCommands::Restart => restart(config, init_system),
@@ -104,14 +105,14 @@ pub fn handle_command(
     }
 }
 
-fn install(config: &Config, init_system: InitSystem) -> Result<()> {
+fn install(config: &Config, init_system: InitSystem, instance_id: Option<&str>) -> Result<()> {
     if cfg!(target_os = "macos") {
-        install_macos(config)
+        install_macos(config, instance_id)
     } else if cfg!(target_os = "linux") {
         let resolved = init_system.resolve()?;
-        install_linux(config, resolved)
+        install_linux(config, resolved, instance_id)
     } else if cfg!(target_os = "windows") {
-        install_windows(config)
+        install_windows(config, instance_id)
     } else {
         anyhow::bail!("Service management is supported on macOS and Linux only");
     }
@@ -374,7 +375,7 @@ fn uninstall_linux(config: &Config, init_system: InitSystem) -> Result<()> {
     Ok(())
 }
 
-fn install_macos(config: &Config) -> Result<()> {
+fn install_macos(config: &Config, instance_id: Option<&str>) -> Result<()> {
     let file = macos_service_file()?;
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent)?;
@@ -391,6 +392,22 @@ fn install_macos(config: &Config) -> Result<()> {
     let stdout = logs_dir.join("daemon.stdout.log");
     let stderr = logs_dir.join("daemon.stderr.log");
 
+    let program_args = match instance_id {
+        Some(id) => format!(
+            r#"    <string>{exe}</string>
+    <string>daemon</string>
+    <string>--instance</string>
+    <string>{id}</string>"#,
+            exe = xml_escape(&exe.display().to_string()),
+            id = xml_escape(id)
+        ),
+        None => format!(
+            r#"    <string>{exe}</string>
+    <string>daemon</string>"#,
+            exe = xml_escape(&exe.display().to_string())
+        ),
+    };
+
     let plist = format!(
         r#"<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
@@ -400,8 +417,7 @@ fn install_macos(config: &Config) -> Result<()> {
   <string>{label}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{exe}</string>
-    <string>daemon</string>
+{program_args}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -415,7 +431,7 @@ fn install_macos(config: &Config) -> Result<()> {
 </plist>
 "#,
         label = SERVICE_LABEL,
-        exe = xml_escape(&exe.display().to_string()),
+        program_args = program_args,
         stdout = xml_escape(&stdout.display().to_string()),
         stderr = xml_escape(&stderr.display().to_string())
     );
@@ -426,24 +442,28 @@ fn install_macos(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn install_linux(config: &Config, init_system: InitSystem) -> Result<()> {
+fn install_linux(config: &Config, init_system: InitSystem, instance_id: Option<&str>) -> Result<()> {
     match init_system {
-        InitSystem::Systemd => install_linux_systemd(config),
-        InitSystem::Openrc => install_linux_openrc(config),
+        InitSystem::Systemd => install_linux_systemd(config, instance_id),
+        InitSystem::Openrc => install_linux_openrc(config, instance_id),
         InitSystem::Auto => unreachable!("Auto should be resolved before this point"),
     }
 }
 
-fn install_linux_systemd(config: &Config) -> Result<()> {
+fn install_linux_systemd(config: &Config, instance_id: Option<&str>) -> Result<()> {
     let file = linux_service_file(config)?;
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;
+    let instance_arg = instance_id
+        .map(|id| format!(" --instance {id}"))
+        .unwrap_or_default();
     let unit = format!(
-        "[Unit]\nDescription=MultiClaw daemon\nAfter=network.target\n\n[Service]\nType=simple\nExecStart={} daemon\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n",
-        exe.display()
+        "[Unit]\nDescription=MultiClaw daemon\nAfter=network.target\n\n[Service]\nType=simple\nExecStart={} daemon{}\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n",
+        exe.display(),
+        instance_arg
     );
 
     fs::write(&file, unit)?;
@@ -819,7 +839,14 @@ fn warn_if_binary_in_home(exe_path: &Path) {
 }
 
 /// Generate OpenRC init script content (pure function for testability)
-fn generate_openrc_script(exe_path: &Path, config_dir: &Path) -> String {
+fn generate_openrc_script(
+    exe_path: &Path,
+    config_dir: &Path,
+    instance_id: Option<&str>,
+) -> String {
+    let instance_arg = instance_id
+        .map(|id| format!(" --instance {id}"))
+        .unwrap_or_default();
     format!(
         r#"#!/sbin/openrc-run
 
@@ -827,7 +854,7 @@ name="multiclaw"
 description="MultiClaw daemon"
 
 command="{}"
-command_args="--config-dir {} daemon"
+command_args="--config-dir {} daemon{}"
 command_background="yes"
 command_user="multiclaw:multiclaw"
 pidfile="/run/${{RC_SVCNAME}}.pid"
@@ -841,7 +868,8 @@ depend() {{
 }}
 "#,
         exe_path.display(),
-        config_dir.display()
+        config_dir.display(),
+        instance_arg
     )
 }
 
@@ -855,7 +883,7 @@ fn resolve_openrc_executable() -> Result<PathBuf> {
     Ok(exe)
 }
 
-fn install_linux_openrc(config: &Config) -> Result<()> {
+fn install_linux_openrc(config: &Config, instance_id: Option<&str>) -> Result<()> {
     if !is_root() {
         bail!(
             "OpenRC service installation requires root privileges.\n\
@@ -955,7 +983,7 @@ fn install_linux_openrc(config: &Config) -> Result<()> {
         );
     }
 
-    let init_script = generate_openrc_script(&exe, config_dir);
+    let init_script = generate_openrc_script(&exe, config_dir, instance_id);
     let init_path = Path::new("/etc/init.d/multiclaw");
     fs::write(init_path, init_script)
         .with_context(|| format!("Failed to write {}", init_path.display()))?;
@@ -975,7 +1003,7 @@ fn install_linux_openrc(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn install_windows(config: &Config) -> Result<()> {
+fn install_windows(config: &Config, instance_id: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;
     let logs_dir = config
         .config_path
@@ -989,9 +1017,13 @@ fn install_windows(config: &Config) -> Result<()> {
     let stdout_log = logs_dir.join("daemon.stdout.log");
     let stderr_log = logs_dir.join("daemon.stderr.log");
 
+    let instance_arg = instance_id
+        .map(|id| format!(" --instance {id}"))
+        .unwrap_or_default();
     let wrapper_content = format!(
-        "@echo off\r\n\"{}\" daemon >>\"{}\" 2>>\"{}\"",
+        "@echo off\r\n\"{}\" daemon{} >>\"{}\" 2>>\"{}\"",
         exe.display(),
+        instance_arg,
         stdout_log.display(),
         stderr_log.display()
     );
@@ -1176,7 +1208,7 @@ mod tests {
         use std::path::PathBuf;
 
         let exe_path = PathBuf::from("/usr/local/bin/multiclaw");
-        let script = generate_openrc_script(&exe_path, Path::new("/etc/multiclaw"));
+        let script = generate_openrc_script(&exe_path, Path::new("/etc/multiclaw"), None);
 
         assert!(script.starts_with("#!/sbin/openrc-run"));
         assert!(script.contains("name=\"multiclaw\""));

@@ -3652,6 +3652,23 @@ fn default_config_dir() -> Result<PathBuf> {
     Ok(home.join(".multiclaw"))
 }
 
+/// Cluster root directory. Prefer `MULTICLAW_CLUSTER_ROOT` env, else `default_config_dir()`.
+pub(crate) fn cluster_root() -> Result<PathBuf> {
+    if let Ok(v) = std::env::var("MULTICLAW_CLUSTER_ROOT") {
+        let v = v.trim();
+        if !v.is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+    default_config_dir()
+}
+
+/// True when running in cluster layout: `instances.json` exists or `instances/` is a directory.
+pub(crate) fn is_cluster_mode(cluster_root: &Path) -> bool {
+    cluster_root.join("instances.json").exists()
+        || cluster_root.join("instances").is_dir()
+}
+
 fn active_workspace_state_path(default_dir: &Path) -> PathBuf {
     default_dir.join(ACTIVE_WORKSPACE_STATE_FILE)
 }
@@ -4006,11 +4023,30 @@ fn read_codex_openai_api_key() -> Option<String> {
 }
 
 impl Config {
-    pub async fn load_or_init() -> Result<Self> {
-        let (default_multiclaw_dir, default_workspace_dir) = default_config_and_workspace_dirs()?;
+    /// Load or initialize config. In cluster mode, when `instance_id_override` or
+    /// `MULTICLAW_INSTANCE` is set, uses `cluster_root/instances/<id>/config.toml` and
+    /// `cluster_root/instances/<id>/workspace`. Otherwise uses existing single-instance resolution.
+    pub async fn load_or_init(instance_id_override: Option<&str>) -> Result<Self> {
+        let instance_id: Option<String> = instance_id_override
+            .map(String::from)
+            .or_else(|| {
+                std::env::var("MULTICLAW_INSTANCE")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            });
+        let root = cluster_root()?;
 
         let (multiclaw_dir, workspace_dir, resolution_source) =
-            resolve_runtime_config_dirs(&default_multiclaw_dir, &default_workspace_dir).await?;
+            if is_cluster_mode(&root) && instance_id.is_some() {
+                let id = instance_id.as_deref().unwrap();
+                let multiclaw_dir = root.join("instances").join(id);
+                let workspace_dir = multiclaw_dir.join("workspace");
+                (multiclaw_dir, workspace_dir, ConfigResolutionSource::DefaultConfigDir)
+            } else {
+                let (default_multiclaw_dir, default_workspace_dir) =
+                    default_config_and_workspace_dirs()?;
+                resolve_runtime_config_dirs(&default_multiclaw_dir, &default_workspace_dir).await?
+            };
 
         let config_path = multiclaw_dir.join("config.toml");
 
@@ -6705,6 +6741,42 @@ requires_openai_auth = true
         let _ = fs::remove_dir_all(default_config_dir).await;
     }
 
+    #[tokio::test]
+    async fn cluster_root_uses_env_when_set() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("MULTICLAW_CLUSTER_ROOT", &dir);
+        let root = cluster_root().unwrap();
+        assert_eq!(root, dir);
+        std::env::remove_var("MULTICLAW_CLUSTER_ROOT");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn is_cluster_mode_false_without_instances_json_or_dir() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_cluster_mode(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn is_cluster_mode_true_with_instances_dir() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(dir.join("instances")).unwrap();
+        assert!(is_cluster_mode(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn is_cluster_mode_true_with_instances_json() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("instances.json"), "{\"version\":1,\"instances\":[]}").unwrap();
+        assert!(is_cluster_mode(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     async fn resolve_runtime_config_dirs_falls_back_to_default_layout() {
         let _env_guard = env_override_lock().await;
@@ -6735,7 +6807,7 @@ requires_openai_auth = true
         std::env::set_var("HOME", &temp_home);
         std::env::set_var("MULTICLAW_WORKSPACE", &workspace_dir);
 
-        let config = Config::load_or_init().await.unwrap();
+        let config = Config::load_or_init(None).await.unwrap();
 
         assert_eq!(config.workspace_dir, workspace_dir.join("workspace"));
         assert_eq!(config.config_path, workspace_dir.join("config.toml"));
@@ -6762,7 +6834,7 @@ requires_openai_auth = true
         std::env::set_var("HOME", &temp_home);
         std::env::set_var("MULTICLAW_WORKSPACE", &workspace_dir);
 
-        let config = Config::load_or_init().await.unwrap();
+        let config = Config::load_or_init(None).await.unwrap();
 
         assert_eq!(config.workspace_dir, workspace_dir);
         assert_eq!(config.config_path, legacy_config_path);
@@ -6800,7 +6872,7 @@ default_model = "legacy-model"
         std::env::set_var("HOME", &temp_home);
         std::env::set_var("MULTICLAW_WORKSPACE", &workspace_dir);
 
-        let config = Config::load_or_init().await.unwrap();
+        let config = Config::load_or_init(None).await.unwrap();
 
         assert_eq!(config.workspace_dir, workspace_dir);
         assert_eq!(config.config_path, legacy_config_path);
@@ -6838,7 +6910,7 @@ default_model = "legacy-model"
             .await
             .unwrap();
 
-        let config = Config::load_or_init().await.unwrap();
+        let config = Config::load_or_init(None).await.unwrap();
 
         assert_eq!(config.config_path, custom_config_dir.join("config.toml"));
         assert_eq!(config.workspace_dir, custom_config_dir.join("workspace"));
@@ -6875,7 +6947,7 @@ default_model = "legacy-model"
             .unwrap();
         std::env::set_var("MULTICLAW_WORKSPACE", &env_workspace_dir);
 
-        let config = Config::load_or_init().await.unwrap();
+        let config = Config::load_or_init(None).await.unwrap();
 
         assert_eq!(config.workspace_dir, env_workspace_dir.join("workspace"));
         assert_eq!(config.config_path, env_workspace_dir.join("config.toml"));

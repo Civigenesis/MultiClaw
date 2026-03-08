@@ -8,6 +8,7 @@ use crate::config::{
     RuntimeConfig, SecretsConfig, SlackConfig, StorageConfig, TelegramConfig, WebhookConfig,
 };
 use crate::hardware::{self, HardwareConfig};
+use crate::instance_registry::{InstanceEntry, InstanceRegistry, InstanceRole, InstanceStatus};
 use crate::memory::{
     default_memory_backend_key, memory_backend_profile, selectable_memory_backends,
 };
@@ -228,7 +229,7 @@ pub async fn run_channels_repair_wizard() -> Result<Config> {
     );
     println!();
 
-    let mut config = Config::load_or_init().await?;
+    let mut config = Config::load_or_init(None).await?;
 
     print_step(1, 1, "Channels (How You Talk to MultiClaw)");
     config.channels_config = setup_channels()?;
@@ -2067,9 +2068,78 @@ async fn persist_workspace_selection(config_path: &Path) -> Result<()> {
 
 // ── Step 1: Workspace ────────────────────────────────────────────
 
+const ADMIN_INSTANCE_ID: &str = "admin";
+const ADMIN_GATEWAY_PORT: u16 = 42617;
+
+/// Minimal config.toml for a new admin instance.
+const MINIMAL_ADMIN_CONFIG: &str = r#"[gateway]
+port = 42617
+host = "127.0.0.1"
+"#;
+
+/// Ensure cluster has an admin instance: create instances/admin and register if missing.
+/// Returns (workspace_dir, config_path) for the admin instance.
+pub(crate) async fn ensure_admin_instance(cluster_root: &Path) -> Result<(PathBuf, PathBuf)> {
+    let mut reg = InstanceRegistry::load(cluster_root).await?;
+    if reg.get(ADMIN_INSTANCE_ID).is_some() {
+        let admin_dir = cluster_root.join("instances").join(ADMIN_INSTANCE_ID);
+        return Ok((admin_dir.join("workspace"), admin_dir.join("config.toml")));
+    }
+
+    let admin_dir = cluster_root.join("instances").join(ADMIN_INSTANCE_ID);
+    fs::create_dir_all(admin_dir.join("workspace"))
+        .await
+        .with_context(|| format!("Failed to create admin instance dir: {}", admin_dir.display()))?;
+
+    let config_path = admin_dir.join("config.toml");
+    fs::write(&config_path, MINIMAL_ADMIN_CONFIG)
+        .await
+        .with_context(|| format!("Failed to write admin config: {}", config_path.display()))?;
+
+    let created_at = chrono::Utc::now().to_rfc3339();
+    reg.add(InstanceEntry {
+        id: ADMIN_INSTANCE_ID.to_string(),
+        role: InstanceRole::Admin,
+        status: InstanceStatus::Created,
+        config_path: Some(config_path.to_string_lossy().into_owned()),
+        workspace_path: Some(admin_dir.join("workspace").to_string_lossy().into_owned()),
+        gateway_port: Some(ADMIN_GATEWAY_PORT),
+        created_at: Some(created_at),
+        constraints: None,
+        preset: None,
+    });
+    reg.save(cluster_root).await?;
+
+    Ok((admin_dir.join("workspace"), config_path))
+}
+
 async fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
-    let (default_config_dir, default_workspace_dir) =
-        crate::config::schema::resolve_runtime_dirs_for_onboarding().await?;
+    let root = crate::config::schema::cluster_root()?;
+    let in_cluster_mode = crate::config::schema::is_cluster_mode(&root);
+
+    let (default_config_dir, default_workspace_dir) = if in_cluster_mode {
+        let (workspace_dir, config_path) = ensure_admin_instance(&root).await?;
+        (
+            config_path.parent().context("admin config path has no parent")?.to_path_buf(),
+            workspace_dir,
+        )
+    } else {
+        let (c, w) = crate::config::schema::resolve_runtime_dirs_for_onboarding().await?;
+        let create_cluster = Confirm::new()
+            .with_prompt("  Create cluster with admin instance? (y/n)")
+            .default(false)
+            .interact()?;
+        if create_cluster {
+            let (_workspace_dir, config_path) = ensure_admin_instance(&root).await?;
+            let config_dir = config_path
+                .parent()
+                .context("admin config path has no parent")?
+                .to_path_buf();
+            (config_dir.clone(), config_dir.join("workspace"))
+        } else {
+            (c, w)
+        }
+    };
 
     print_bullet(&format!(
         "Default location: {}",

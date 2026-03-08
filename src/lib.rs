@@ -53,6 +53,7 @@ pub(crate) mod health;
 pub(crate) mod heartbeat;
 pub mod hooks;
 pub(crate) mod identity;
+pub mod instance_registry;
 pub(crate) mod integrations;
 pub mod memory;
 pub(crate) mod migration;
