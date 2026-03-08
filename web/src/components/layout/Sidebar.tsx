@@ -35,7 +35,7 @@ export default function Sidebar() {
           ZC
         </div>
         <span className="text-lg font-semibold text-white tracking-wide">
-          ZeroClaw
+          MultiClaw
         </span>
       </div>
 

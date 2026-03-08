@@ -1,6 +1,6 @@
-# ZeroClaw Commands Reference
+# MultiClaw Commands Reference
 
-This reference is derived from the current CLI surface (`zeroclaw --help`).
+This reference is derived from the current CLI surface (`multiclaw --help`).
 
 Last verified: **February 21, 2026**.
 
@@ -32,13 +32,13 @@ Last verified: **February 21, 2026**.
 
 ### `onboard`
 
-- `zeroclaw onboard`
-- `zeroclaw onboard --interactive`
-- `zeroclaw onboard --channels-only`
-- `zeroclaw onboard --force`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none> --force`
+- `multiclaw onboard`
+- `multiclaw onboard --interactive`
+- `multiclaw onboard --channels-only`
+- `multiclaw onboard --force`
+- `multiclaw onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
+- `multiclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
+- `multiclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none> --force`
 
 `onboard` safety behavior:
 
@@ -46,14 +46,14 @@ Last verified: **February 21, 2026**.
   - Full onboarding (overwrite `config.toml`)
   - Provider-only update (update provider/model/API key while preserving existing channels, tunnel, memory, hooks, and other settings)
 - In non-interactive environments, existing `config.toml` causes a safe refusal unless `--force` is passed.
-- Use `zeroclaw onboard --channels-only` when you only need to rotate channel tokens/allowlists.
+- Use `multiclaw onboard --channels-only` when you only need to rotate channel tokens/allowlists.
 
 ### `agent`
 
-- `zeroclaw agent`
-- `zeroclaw agent -m "Hello"`
-- `zeroclaw agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
-- `zeroclaw agent --peripheral <board:path>`
+- `multiclaw agent`
+- `multiclaw agent -m "Hello"`
+- `multiclaw agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
+- `multiclaw agent --peripheral <board:path>`
 
 Tip:
 
@@ -61,21 +61,21 @@ Tip:
 
 ### `gateway` / `daemon`
 
-- `zeroclaw gateway [--host <HOST>] [--port <PORT>]`
-- `zeroclaw daemon [--host <HOST>] [--port <PORT>]`
+- `multiclaw gateway [--host <HOST>] [--port <PORT>]`
+- `multiclaw daemon [--host <HOST>] [--port <PORT>]`
 
 ### `estop`
 
-- `zeroclaw estop` (engage `kill-all`)
-- `zeroclaw estop --level network-kill`
-- `zeroclaw estop --level domain-block --domain "*.chase.com" [--domain "*.paypal.com"]`
-- `zeroclaw estop --level tool-freeze --tool shell [--tool browser]`
-- `zeroclaw estop status`
-- `zeroclaw estop resume`
-- `zeroclaw estop resume --network`
-- `zeroclaw estop resume --domain "*.chase.com"`
-- `zeroclaw estop resume --tool shell`
-- `zeroclaw estop resume --otp <123456>`
+- `multiclaw estop` (engage `kill-all`)
+- `multiclaw estop --level network-kill`
+- `multiclaw estop --level domain-block --domain "*.chase.com" [--domain "*.paypal.com"]`
+- `multiclaw estop --level tool-freeze --tool shell [--tool browser]`
+- `multiclaw estop status`
+- `multiclaw estop resume`
+- `multiclaw estop resume --network`
+- `multiclaw estop resume --domain "*.chase.com"`
+- `multiclaw estop resume --tool shell`
+- `multiclaw estop resume --otp <123456>`
 
 Notes:
 
@@ -85,23 +85,23 @@ Notes:
 
 ### `service`
 
-- `zeroclaw service install`
-- `zeroclaw service start`
-- `zeroclaw service stop`
-- `zeroclaw service restart`
-- `zeroclaw service status`
-- `zeroclaw service uninstall`
+- `multiclaw service install`
+- `multiclaw service start`
+- `multiclaw service stop`
+- `multiclaw service restart`
+- `multiclaw service status`
+- `multiclaw service uninstall`
 
 ### `cron`
 
-- `zeroclaw cron list`
-- `zeroclaw cron add <expr> [--tz <IANA_TZ>] <command>`
-- `zeroclaw cron add-at <rfc3339_timestamp> <command>`
-- `zeroclaw cron add-every <every_ms> <command>`
-- `zeroclaw cron once <delay> <command>`
-- `zeroclaw cron remove <id>`
-- `zeroclaw cron pause <id>`
-- `zeroclaw cron resume <id>`
+- `multiclaw cron list`
+- `multiclaw cron add <expr> [--tz <IANA_TZ>] <command>`
+- `multiclaw cron add-at <rfc3339_timestamp> <command>`
+- `multiclaw cron add-every <every_ms> <command>`
+- `multiclaw cron once <delay> <command>`
+- `multiclaw cron remove <id>`
+- `multiclaw cron pause <id>`
+- `multiclaw cron resume <id>`
 
 Notes:
 
@@ -110,29 +110,29 @@ Notes:
 
 ### `models`
 
-- `zeroclaw models refresh`
-- `zeroclaw models refresh --provider <ID>`
-- `zeroclaw models refresh --force`
+- `multiclaw models refresh`
+- `multiclaw models refresh --provider <ID>`
+- `multiclaw models refresh --force`
 
 `models refresh` currently supports live catalog refresh for provider IDs: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `llamacpp`, `sglang`, `vllm`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `glm`, `zai`, `qwen`, and `nvidia`.
 
 ### `doctor`
 
-- `zeroclaw doctor`
-- `zeroclaw doctor models [--provider <ID>] [--use-cache]`
-- `zeroclaw doctor traces [--limit <N>] [--event <TYPE>] [--contains <TEXT>]`
-- `zeroclaw doctor traces --id <TRACE_ID>`
+- `multiclaw doctor`
+- `multiclaw doctor models [--provider <ID>] [--use-cache]`
+- `multiclaw doctor traces [--limit <N>] [--event <TYPE>] [--contains <TEXT>]`
+- `multiclaw doctor traces --id <TRACE_ID>`
 
 `doctor traces` reads runtime tool/model diagnostics from `observability.runtime_trace_path`.
 
 ### `channel`
 
-- `zeroclaw channel list`
-- `zeroclaw channel start`
-- `zeroclaw channel doctor`
-- `zeroclaw channel bind-telegram <IDENTITY>`
-- `zeroclaw channel add <type> <json>`
-- `zeroclaw channel remove <name>`
+- `multiclaw channel list`
+- `multiclaw channel start`
+- `multiclaw channel doctor`
+- `multiclaw channel bind-telegram <IDENTITY>`
+- `multiclaw channel add <type> <json>`
+- `multiclaw channel remove <name>`
 
 Runtime in-chat commands (Telegram/Discord while channel server is running):
 
@@ -153,14 +153,14 @@ Channel runtime also watches `config.toml` and hot-applies updates to:
 
 ### `integrations`
 
-- `zeroclaw integrations info <name>`
+- `multiclaw integrations info <name>`
 
 ### `skills`
 
-- `zeroclaw skills list`
-- `zeroclaw skills audit <source_or_name>`
-- `zeroclaw skills install <source>`
-- `zeroclaw skills remove <name>`
+- `multiclaw skills list`
+- `multiclaw skills audit <source_or_name>`
+- `multiclaw skills install <source>`
+- `multiclaw skills remove <name>`
 
 `<source>` accepts git remotes (`https://...`, `http://...`, `ssh://...`, and `git@host:owner/repo.git`) or a local filesystem path.
 
@@ -176,43 +176,43 @@ Skill manifests (`SKILL.toml`) support `prompts` and `[[tools]]`; both are injec
 
 ### `migrate`
 
-- `zeroclaw migrate openclaw [--source <path>] [--dry-run]`
+- `multiclaw migrate openclaw [--source <path>] [--dry-run]`
 
 ### `config`
 
-- `zeroclaw config schema`
+- `multiclaw config schema`
 
 `config schema` prints a JSON Schema (draft 2020-12) for the full `config.toml` contract to stdout.
 
 ### `completions`
 
-- `zeroclaw completions bash`
-- `zeroclaw completions fish`
-- `zeroclaw completions zsh`
-- `zeroclaw completions powershell`
-- `zeroclaw completions elvish`
+- `multiclaw completions bash`
+- `multiclaw completions fish`
+- `multiclaw completions zsh`
+- `multiclaw completions powershell`
+- `multiclaw completions elvish`
 
 `completions` is stdout-only by design so scripts can be sourced directly without log/warning contamination.
 
 ### `hardware`
 
-- `zeroclaw hardware discover`
-- `zeroclaw hardware introspect <path>`
-- `zeroclaw hardware info [--chip <chip_name>]`
+- `multiclaw hardware discover`
+- `multiclaw hardware introspect <path>`
+- `multiclaw hardware info [--chip <chip_name>]`
 
 ### `peripheral`
 
-- `zeroclaw peripheral list`
-- `zeroclaw peripheral add <board> <path>`
-- `zeroclaw peripheral flash [--port <serial_port>]`
-- `zeroclaw peripheral setup-uno-q [--host <ip_or_host>]`
-- `zeroclaw peripheral flash-nucleo`
+- `multiclaw peripheral list`
+- `multiclaw peripheral add <board> <path>`
+- `multiclaw peripheral flash [--port <serial_port>]`
+- `multiclaw peripheral setup-uno-q [--host <ip_or_host>]`
+- `multiclaw peripheral flash-nucleo`
 
 ## Validation Tip
 
 To verify docs against your current binary quickly:
 
 ```bash
-zeroclaw --help
-zeroclaw <command> --help
+multiclaw --help
+multiclaw <command> --help
 ```

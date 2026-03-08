@@ -5,24 +5,24 @@
 //! external service dependencies. They complement the unit tests in
 //! `src/agent/tests.rs` by running at the integration test boundary.
 //!
-//! Ref: https://github.com/zeroclaw-labs/zeroclaw/issues/618 (item 6)
+//! Ref: https://github.com/Civigenesis/MultiClaw/issues/618 (item 6)
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use zeroclaw::agent::agent::Agent;
-use zeroclaw::agent::dispatcher::{NativeToolDispatcher, XmlToolDispatcher};
-use zeroclaw::agent::memory_loader::MemoryLoader;
-use zeroclaw::config::MemoryConfig;
-use zeroclaw::memory;
-use zeroclaw::memory::Memory;
-use zeroclaw::observability::{NoopObserver, Observer};
-use zeroclaw::providers::traits::ChatMessage;
-use zeroclaw::providers::{
+use multiclaw::agent::agent::Agent;
+use multiclaw::agent::dispatcher::{NativeToolDispatcher, XmlToolDispatcher};
+use multiclaw::agent::memory_loader::MemoryLoader;
+use multiclaw::config::MemoryConfig;
+use multiclaw::memory;
+use multiclaw::memory::Memory;
+use multiclaw::observability::{NoopObserver, Observer};
+use multiclaw::providers::traits::ChatMessage;
+use multiclaw::providers::{
     ChatRequest, ChatResponse, ConversationMessage, Provider, ProviderRuntimeOptions, ToolCall,
 };
-use zeroclaw::tools::{Tool, ToolResult};
+use multiclaw::tools::{Tool, ToolResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock infrastructure
@@ -588,7 +588,7 @@ async fn e2e_multi_turn_with_memory_enrichment() {
     let (provider, recorded) =
         RecordingProvider::new(vec![text_response("answer 1"), text_response("answer 2")]);
 
-    let memory_context = "[Memory context]\n- project: zeroclaw\n\n";
+    let memory_context = "[Memory context]\n- project: multiclaw\n\n";
     let loader = StaticMemoryLoader::new(memory_context);
 
     let mut agent = build_recording_agent(Box::new(provider), vec![], Some(Box::new(loader)));
@@ -605,7 +605,7 @@ async fn e2e_multi_turn_with_memory_enrichment() {
     // Turn 1: user message is enriched
     let req1_user = requests[0].iter().find(|m| m.role == "user").unwrap();
     assert!(req1_user.content.contains("[Memory context]"));
-    assert!(req1_user.content.contains("project: zeroclaw"));
+    assert!(req1_user.content.contains("project: multiclaw"));
     assert!(req1_user.content.ends_with("first question"));
 
     // Turn 2: both user messages enriched, assistant from turn 1 present
@@ -666,13 +666,13 @@ async fn e2e_empty_memory_context_passthrough() {
 /// Sends a real multi-turn conversation to OpenAI Codex and verifies
 /// the model retains context from earlier messages.
 ///
-/// Requires valid OAuth credentials in `~/.zeroclaw/`.
+/// Requires valid OAuth credentials in `~/.multiclaw/`.
 /// Run manually: `cargo test e2e_live_openai_codex_multi_turn -- --ignored`
 #[tokio::test]
 #[ignore]
 async fn e2e_live_openai_codex_multi_turn() {
-    use zeroclaw::providers::openai_codex::OpenAiCodexProvider;
-    use zeroclaw::providers::traits::Provider;
+    use multiclaw::providers::openai_codex::OpenAiCodexProvider;
+    use multiclaw::providers::traits::Provider;
 
     let provider = OpenAiCodexProvider::new(&ProviderRuntimeOptions::default(), None).unwrap();
     let model = "gpt-5.3-codex";

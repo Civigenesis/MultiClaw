@@ -1,4 +1,4 @@
-# ZeroClaw Providers Reference
+# MultiClaw Providers Reference
 
 This document maps provider IDs, aliases, and credential environment variables.
 
@@ -7,7 +7,7 @@ Last verified: **February 21, 2026**.
 ## How to List Providers
 
 ```bash
-zeroclaw providers
+multiclaw providers
 ```
 
 ## Credential Resolution Order
@@ -16,7 +16,7 @@ Runtime resolution order is:
 
 1. Explicit credential from config/CLI
 2. Provider-specific env var(s)
-3. Generic fallback env vars: `ZEROCLAW_API_KEY` then `API_KEY`
+3. Generic fallback env vars: `MULTICLAW_API_KEY` then `API_KEY`
 
 For resilient fallback chains (`reliability.fallback_providers`), each fallback
 provider resolves credentials independently. The primary provider's explicit
@@ -45,6 +45,7 @@ credential is not reused for fallback providers.
 | `qianfan` | `baidu` | No | `QIANFAN_API_KEY` |
 | `doubao` | `volcengine`, `ark`, `doubao-cn` | No | `ARK_API_KEY`, `DOUBAO_API_KEY` |
 | `qwen` | `dashscope`, `qwen-intl`, `dashscope-intl`, `qwen-us`, `dashscope-us`, `qwen-code`, `qwen-oauth`, `qwen_oauth` | No | `QWEN_OAUTH_TOKEN`, `DASHSCOPE_API_KEY` |
+| `qwen-coding-plan` | `qwen_coding_plan`, `coding-plan`, `bailian-coding-plan` | No | `DASHSCOPE_API_KEY`, `MULTICLAW_API_KEY`, `API_KEY` |
 | `groq` | — | No | `GROQ_API_KEY` |
 | `mistral` | — | No | `MISTRAL_API_KEY` |
 | `xai` | `grok` | No | `XAI_API_KEY` |
@@ -82,14 +83,14 @@ credential is not reused for fallback providers.
 
 - Provider ID: `ollama`
 - Vision input is supported through user message image markers: ``[IMAGE:<source>]``.
-- After multimodal normalization, ZeroClaw sends image payloads through Ollama's native `messages[].images` field.
-- If a non-vision provider is selected, ZeroClaw returns a structured capability error instead of silently ignoring images.
+- After multimodal normalization, MultiClaw sends image payloads through Ollama's native `messages[].images` field.
+- If a non-vision provider is selected, MultiClaw returns a structured capability error instead of silently ignoring images.
 
 ### Ollama Cloud Routing Notes
 
 - Use `:cloud` model suffix only with a remote Ollama endpoint.
 - Remote endpoint should be set in `api_url` (example: `https://ollama.com`).
-- ZeroClaw normalizes a trailing `/api` in `api_url` automatically.
+- MultiClaw normalizes a trailing `/api` in `api_url` automatically.
 - If `default_model` ends with `:cloud` while `api_url` is local or unset, config validation fails early with an actionable error.
 - Local Ollama model discovery intentionally excludes `:cloud` entries to avoid selecting cloud-only models in local mode.
 
@@ -98,7 +99,7 @@ credential is not reused for fallback providers.
 - Provider ID: `llamacpp` (alias: `llama.cpp`)
 - Default endpoint: `http://localhost:8080/v1`
 - API key is optional by default; set `LLAMACPP_API_KEY` only when `llama-server` is started with `--api-key`.
-- Model discovery: `zeroclaw models refresh --provider llamacpp`
+- Model discovery: `multiclaw models refresh --provider llamacpp`
 
 ### SGLang Server Notes
 
@@ -106,21 +107,21 @@ credential is not reused for fallback providers.
 - Default endpoint: `http://localhost:30000/v1`
 - API key is optional by default; set `SGLANG_API_KEY` only when the server requires authentication.
 - Tool calling requires launching SGLang with `--tool-call-parser` (e.g. `hermes`, `llama3`, `qwen25`).
-- Model discovery: `zeroclaw models refresh --provider sglang`
+- Model discovery: `multiclaw models refresh --provider sglang`
 
 ### vLLM Server Notes
 
 - Provider ID: `vllm`
 - Default endpoint: `http://localhost:8000/v1`
 - API key is optional by default; set `VLLM_API_KEY` only when the server requires authentication.
-- Model discovery: `zeroclaw models refresh --provider vllm`
+- Model discovery: `multiclaw models refresh --provider vllm`
 
 ### Osaurus Server Notes
 
 - Provider ID: `osaurus`
 - Default endpoint: `http://localhost:1337/v1`
 - API key defaults to `"osaurus"` but is optional; set `OSAURUS_API_KEY` to override or leave unset for keyless access.
-- Model discovery: `zeroclaw models refresh --provider osaurus`
+- Model discovery: `multiclaw models refresh --provider osaurus`
 - [Osaurus](https://github.com/dinoki-ai/osaurus) is a unified AI edge runtime for macOS (Apple Silicon) that combines local MLX inference with cloud provider proxying through a single endpoint.
 - Supports multiple API formats simultaneously: OpenAI-compatible (`/v1/chat/completions`), Anthropic (`/messages`), Ollama (`/chat`), and Open Responses (`/v1/responses`).
 - Built-in MCP (Model Context Protocol) support for tool and context server connectivity.
@@ -164,7 +165,7 @@ Behavior:
 - Canonical provider ID: `nvidia`
 - Aliases: `nvidia-nim`, `build.nvidia.com`
 - Base API URL: `https://integrate.api.nvidia.com/v1`
-- Model discovery: `zeroclaw models refresh --provider nvidia`
+- Model discovery: `multiclaw models refresh --provider nvidia`
 
 Recommended starter model IDs (verified against NVIDIA API catalog on February 18, 2026):
 
@@ -233,6 +234,22 @@ Optional endpoint override:
 
 - `QWEN_OAUTH_RESOURCE_URL` (normalized to `https://.../v1` if needed)
 - If unset, `resource_url` from cached OAuth credentials is used when available
+
+## Qwen Coding Plan (Bailian)
+
+阿里云百炼 Coding Plan 使用专属 API Key（`sk-sp-` 前缀）和 OpenAI 兼容端点。MultiClaw 通过 `qwen-coding-plan` provider 接入，请求使用与 OpenClaw 兼容的 User-Agent 以便通过服务端白名单。
+
+Config example:
+
+```toml
+api_key = "sk-sp-xxxxx"
+default_provider = "qwen-coding-plan"
+default_model = "qwen3.5-plus"
+```
+
+- Base URL: `https://coding.dashscope.aliyuncs.com/v1`（可通过 `api_url` 覆盖）
+- 认证：Bearer `api_key`（Coding Plan 控制台获取的 sk-sp- 密钥）
+- 与 OpenClaw 的认证方式一致：OpenAI-compatible API + apiKey；MultiClaw 通过发送 OpenClaw 风格 User-Agent 模拟为 OpenClaw 调用以满足 Coding Plan 的 “Coding Agents” 白名单要求。
 
 ## Model Routing (`hint:<name>`)
 
@@ -303,8 +320,8 @@ Recommended workflow:
 1. Keep call sites stable (`hint:reasoning`, `hint:semantic`).
 2. Change only the target model under `[[model_routes]]` or `[[embedding_routes]]`.
 3. Run:
-   - `zeroclaw doctor`
-   - `zeroclaw status`
+   - `multiclaw doctor`
+   - `multiclaw status`
 4. Smoke test one representative flow (chat + memory retrieval) before rollout.
 
 This minimizes breakage because integrations and prompts do not need to change when model IDs are upgraded.

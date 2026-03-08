@@ -62,6 +62,7 @@ const MOONSHOT_CN_BASE_URL: &str = "https://api.moonshot.cn/v1";
 const QWEN_CN_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const QWEN_INTL_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 const QWEN_US_BASE_URL: &str = "https://dashscope-us.aliyuncs.com/compatible-mode/v1";
+const QWEN_CODING_PLAN_BASE_URL: &str = "https://coding.dashscope.aliyuncs.com/v1";
 const QWEN_OAUTH_BASE_FALLBACK_URL: &str = QWEN_CN_BASE_URL;
 const QWEN_OAUTH_TOKEN_ENDPOINT: &str = "https://chat.qwen.ai/api/v1/oauth2/token";
 const QWEN_OAUTH_PLACEHOLDER: &str = "qwen-oauth";
@@ -146,11 +147,19 @@ pub(crate) fn is_qwen_oauth_alias(name: &str) -> bool {
     matches!(name, "qwen-code" | "qwen-oauth" | "qwen_oauth")
 }
 
+pub(crate) fn is_qwen_coding_plan_alias(name: &str) -> bool {
+    matches!(
+        name,
+        "qwen-coding-plan" | "qwen_coding_plan" | "coding-plan" | "bailian-coding-plan"
+    )
+}
+
 pub(crate) fn is_qwen_alias(name: &str) -> bool {
     is_qwen_cn_alias(name)
         || is_qwen_intl_alias(name)
         || is_qwen_us_alias(name)
         || is_qwen_oauth_alias(name)
+        || is_qwen_coding_plan_alias(name)
 }
 
 pub(crate) fn is_zai_global_alias(name: &str) -> bool {
@@ -648,7 +657,9 @@ fn moonshot_base_url(name: &str) -> Option<&'static str> {
 }
 
 fn qwen_base_url(name: &str) -> Option<&'static str> {
-    if is_qwen_cn_alias(name) || is_qwen_oauth_alias(name) {
+    if is_qwen_coding_plan_alias(name) {
+        Some(QWEN_CODING_PLAN_BASE_URL)
+    } else if is_qwen_cn_alias(name) || is_qwen_oauth_alias(name) {
         Some(QWEN_CN_BASE_URL)
     } else if is_qwen_intl_alias(name) {
         Some(QWEN_INTL_BASE_URL)
@@ -673,7 +684,7 @@ fn zai_base_url(name: &str) -> Option<&'static str> {
 pub struct ProviderRuntimeOptions {
     pub auth_profile_override: Option<String>,
     pub provider_api_url: Option<String>,
-    pub zeroclaw_dir: Option<PathBuf>,
+    pub multiclaw_dir: Option<PathBuf>,
     pub secrets_encrypt: bool,
     pub reasoning_enabled: Option<bool>,
 }
@@ -683,7 +694,7 @@ impl Default for ProviderRuntimeOptions {
         Self {
             auth_profile_override: None,
             provider_api_url: None,
-            zeroclaw_dir: None,
+            multiclaw_dir: None,
             secrets_encrypt: true,
             reasoning_enabled: None,
         }
@@ -780,7 +791,7 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
 /// Resolution order:
 /// 1. Explicitly provided `api_key` parameter (trimmed, filtered if empty)
 /// 2. Provider-specific environment variable (e.g., `ANTHROPIC_OAUTH_TOKEN`, `OPENROUTER_API_KEY`)
-/// 3. Generic fallback variables (`ZEROCLAW_API_KEY`, `API_KEY`)
+/// 3. Generic fallback variables (`MULTICLAW_API_KEY`, `API_KEY`)
 ///
 /// For Anthropic, the provider-specific env var is `ANTHROPIC_OAUTH_TOKEN` (for setup-tokens)
 /// followed by `ANTHROPIC_API_KEY` (for regular API keys).
@@ -870,7 +881,7 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         return None;
     }
 
-    for env_var in ["ZEROCLAW_API_KEY", "API_KEY"] {
+    for env_var in ["MULTICLAW_API_KEY", "API_KEY"] {
         if let Ok(value) = std::env::var(env_var) {
             let value = value.trim();
             if !value.is_empty() {
@@ -979,12 +990,12 @@ fn create_provider_with_url_and_options(
         ))),
         "gemini" | "google" | "google-gemini" => {
             let state_dir = options
-                .zeroclaw_dir
+                .multiclaw_dir
                 .clone()
                 .unwrap_or_else(|| {
                     directories::UserDirs::new().map_or_else(
-                        || PathBuf::from(".zeroclaw"),
-                        |dirs| dirs.home_dir().join(".zeroclaw"),
+                        || PathBuf::from(".multiclaw"),
+                        |dirs| dirs.home_dir().join(".multiclaw"),
                     )
                 });
             let auth_service = AuthService::new(&state_dir, options.secrets_encrypt);
@@ -1071,6 +1082,20 @@ fn create_provider_with_url_and_options(
                 key,
                 AuthStyle::Bearer,
                 "QwenCode/1.0",
+                true,
+            )))
+        }
+        name if is_qwen_coding_plan_alias(name) => {
+            let base_url = api_url
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or(QWEN_CODING_PLAN_BASE_URL);
+            Ok(Box::new(OpenAiCompatibleProvider::new_with_user_agent_and_vision(
+                "Qwen Coding Plan",
+                base_url,
+                key,
+                AuthStyle::Bearer,
+                "OpenClaw-Agent/1.0 (compatible; OpenAI-API-Client)",
                 true,
             )))
         }
@@ -1240,7 +1265,7 @@ fn create_provider_with_url_and_options(
         }
 
         _ => anyhow::bail!(
-            "Unknown provider: {name}. Check README for supported providers or run `zeroclaw onboard --interactive` to reconfigure.\n\
+            "Unknown provider: {name}. Check README for supported providers or run `multiclaw onboard --interactive` to reconfigure.\n\
              Tip: Use \"custom:https://your-api.com\" for OpenAI-compatible endpoints.\n\
              Tip: Use \"anthropic-custom:https://your-api.com\" for Anthropic-compatible endpoints."
         ),
@@ -1456,7 +1481,7 @@ pub struct ProviderInfo {
     pub local: bool,
 }
 
-/// Return the list of all known providers for display in `zeroclaw providers list`.
+/// Return the list of all known providers for display in `multiclaw providers list`.
 ///
 /// This is intentionally separate from the factory match in `create_provider`
 /// (display concern vs. construction concern).
@@ -1601,6 +1626,12 @@ pub fn list_providers() -> Vec<ProviderInfo> {
                 "qwen-oauth",
                 "qwen_oauth",
             ],
+            local: false,
+        },
+        ProviderInfo {
+            name: "qwen-coding-plan",
+            display_name: "Qwen Coding Plan (Bailian / OpenAI-compatible)",
+            aliases: &["qwen_coding_plan", "coding-plan", "bailian-coding-plan"],
             local: false,
         },
         ProviderInfo {
@@ -1806,7 +1837,7 @@ mod tests {
     #[test]
     fn resolve_qwen_oauth_context_prefers_explicit_override() {
         let _env_lock = env_lock();
-        let fake_home = format!("/tmp/zeroclaw-qwen-oauth-home-{}", std::process::id());
+        let fake_home = format!("/tmp/multiclaw-qwen-oauth-home-{}", std::process::id());
         let _home_guard = EnvGuard::set("HOME", Some(fake_home.as_str()));
         let _token_guard = EnvGuard::set(QWEN_OAUTH_TOKEN_ENV, Some("oauth-token"));
         let _resource_guard = EnvGuard::set(
@@ -1823,7 +1854,7 @@ mod tests {
     #[test]
     fn resolve_qwen_oauth_context_uses_env_token_and_resource_url() {
         let _env_lock = env_lock();
-        let fake_home = format!("/tmp/zeroclaw-qwen-oauth-home-{}-env", std::process::id());
+        let fake_home = format!("/tmp/multiclaw-qwen-oauth-home-{}-env", std::process::id());
         let _home_guard = EnvGuard::set("HOME", Some(fake_home.as_str()));
         let _token_guard = EnvGuard::set(QWEN_OAUTH_TOKEN_ENV, Some("oauth-token"));
         let _refresh_guard = EnvGuard::set(QWEN_OAUTH_REFRESH_TOKEN_ENV, None);
@@ -1845,7 +1876,7 @@ mod tests {
     #[test]
     fn resolve_qwen_oauth_context_reads_cached_credentials_file() {
         let _env_lock = env_lock();
-        let fake_home = format!("/tmp/zeroclaw-qwen-oauth-home-{}-file", std::process::id());
+        let fake_home = format!("/tmp/multiclaw-qwen-oauth-home-{}-file", std::process::id());
         let creds_dir = PathBuf::from(&fake_home).join(".qwen");
         std::fs::create_dir_all(&creds_dir).unwrap();
         let creds_path = creds_dir.join("oauth_creds.json");
@@ -1874,7 +1905,7 @@ mod tests {
     fn resolve_qwen_oauth_context_placeholder_does_not_use_dashscope_fallback() {
         let _env_lock = env_lock();
         let fake_home = format!(
-            "/tmp/zeroclaw-qwen-oauth-home-{}-placeholder",
+            "/tmp/multiclaw-qwen-oauth-home-{}-placeholder",
             std::process::id()
         );
         let _home_guard = EnvGuard::set("HOME", Some(fake_home.as_str()));

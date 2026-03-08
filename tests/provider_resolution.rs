@@ -7,8 +7,8 @@
 //! to provider construction, verifying factory resolution, URL construction,
 //! credential wiring, and auth header format.
 
-use zeroclaw::providers::compatible::{AuthStyle, OpenAiCompatibleProvider};
-use zeroclaw::providers::{
+use multiclaw::providers::compatible::{AuthStyle, OpenAiCompatibleProvider};
+use multiclaw::providers::{
     create_provider, create_provider_with_options, create_provider_with_url,
 };
 
@@ -276,7 +276,7 @@ fn factory_resolves_synthetic_provider() {
 
 #[test]
 fn factory_resolves_openai_codex_provider() {
-    let options = zeroclaw::providers::ProviderRuntimeOptions::default();
+    let options = multiclaw::providers::ProviderRuntimeOptions::default();
     let result = create_provider_with_options("openai-codex", None, &options);
     assert!(
         result.is_ok(),
@@ -326,6 +326,11 @@ fn factory_resolves_glm_provider() {
 #[test]
 fn factory_resolves_qwen_provider() {
     assert_provider_ok("qwen", Some("test-key"), None);
+}
+
+#[test]
+fn factory_resolves_qwen_coding_plan_provider() {
+    assert_provider_ok("qwen-coding-plan", Some("test-key"), None);
 }
 
 #[test]

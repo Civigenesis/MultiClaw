@@ -45,7 +45,7 @@ export async function apiFetch<T = unknown>(
 
   if (response.status === 401) {
     clearToken();
-    window.dispatchEvent(new Event('zeroclaw-unauthorized'));
+    window.dispatchEvent(new Event('multiclaw-unauthorized'));
     throw new UnauthorizedError();
   }
 

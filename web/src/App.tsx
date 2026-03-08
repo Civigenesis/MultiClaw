@@ -50,7 +50,7 @@ function PairingDialog({ onPair }: { onPair: (code: string) => Promise<void> }) 
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="bg-gray-900 rounded-xl p-8 w-full max-w-md border border-gray-800">
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-white mb-2">ZeroClaw</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">MultiClaw</h1>
           <p className="text-gray-400">Enter the pairing code from your terminal</p>
         </div>
         <form onSubmit={handleSubmit}>
@@ -93,8 +93,8 @@ function AppContent() {
     const handler = () => {
       logout();
     };
-    window.addEventListener('zeroclaw-unauthorized', handler);
-    return () => window.removeEventListener('zeroclaw-unauthorized', handler);
+    window.addEventListener('multiclaw-unauthorized', handler);
+    return () => window.removeEventListener('multiclaw-unauthorized', handler);
   }, [logout]);
 
   if (loading) {
