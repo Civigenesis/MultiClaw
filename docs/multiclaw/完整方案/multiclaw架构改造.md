@@ -70,12 +70,17 @@
 │   │   ├── checkpoints/             # 业务级检查点（3.0）
 │   │   └── workspace/
 │   │       ├── sessions/ memory/ state/ cron/ skills/
-│   └── <instance_id>/               # 普通实例
+│   └── <instance_id>/               # 普通实例（单实例多实体）
 │       ├── config.toml
 │       ├── daemon_state.json
-│       ├── entities.json            # 可选
 │       ├── checkpoints/
 │       └── workspace/
+│           ├── sessions/ memory/ state/ cron/ skills/   # 实例级（或 ceo 使用）
+│           ├── entities/            # 各实体独立 workspace（阶段 2）
+│           │   └── <entity_id>/
+│           │       ├── memory/ state/ sessions/ skills/
+│           └── teams/               # 团队共享目录（可选）
+│               └── <team_id>/
 ```
 
 ### 3.2 实例注册表结构
@@ -126,10 +131,22 @@
 | freeform | 无预设；可有机组队 | 随机社交；1:1/群聊自由 | random_social、allow_organic_teams |
 | project | 项目为中心 | 任务绑定 project；项目看板 | projects、project_ids |
 
-### 4.3 记忆与技能作用域
+### 4.3 实体/团队 workspace 管理（阶段 2）
 
-- **记忆**：key 前缀 `entity:<id>:`、`team:<id>:`、`instance:`
-- **技能**：实例级 `workspace/skills/`；实体级 `skills: [a,b]` 白名单；全局 `shared/skills/` 需管理员审批
+- **实体独立 workspace**：每个实体在实例下拥有独立目录 `instances/<id>/workspace/entities/<entity_id>/`，可含 `memory/`、`state/`、`sessions/`、`skills/` 等，用于隔离该实体的记忆、状态与产出。
+- **团队目录**：`workspace/teams/<team_id>/` 用于团队共享；create_team 持久化到 config 后创建该目录。
+- **create_team / create_entity**：必须写入 config.toml（追加 `[instance.teams]` / `[[instance.entities]]`），并创建对应 workspace 子目录；不得仅为占位实现。
+
+### 4.4 每实体的个性化与描述文件（独立决策）
+
+- **目标**：每个实体（admin/CEO/工作节点）除在 config 中注册外，拥有自己的**描述文件**（如 IDENTITY.md、SOUL.md、AGENTS.md、可选 agent.md），用于构建 system prompt，实现独立身份与决策风格。
+- **当前实现**：实例级 workspace 下有 OpenClaw 风格文件 + config `[identity]`（AIEOS 等），在 `build_system_prompt` 时从单一 `workspace_dir` 注入。
+- **扩展**：以某实体身份运行时，**prompt 根目录** = `workspace/entities/<entity_id>/`；从该目录加载 SOUL.md、IDENTITY.md 等；缺失时可回退实例级。**实体创建时**在其实体 workspace 内执行 scaffold（默认 IDENTITY/SOUL/AGENTS），**实例创建时**可对实例级 workspace 做最小 scaffold。
+
+### 4.5 记忆与技能作用域
+
+- **记忆**：key 前缀 `entity:<id>:`、`team:<id>:`、`instance:`；实体专属数据落在 `workspace/entities/<entity_id>/`。
+- **技能**：实例级 `workspace/skills/`；实体级 `workspace/entities/<entity_id>/skills/` 或白名单；全局 `shared/skills/` 需管理员审批
 
 ---
 

@@ -47,6 +47,7 @@ pub(crate) mod cost;
 pub(crate) mod cron;
 pub(crate) mod daemon;
 pub(crate) mod doctor;
+pub mod entity;
 pub mod gateway;
 pub(crate) mod hardware;
 pub(crate) mod health;
@@ -54,6 +55,7 @@ pub(crate) mod heartbeat;
 pub mod hooks;
 pub(crate) mod identity;
 pub mod instance_registry;
+pub mod instance_manager;
 pub(crate) mod integrations;
 pub mod memory;
 pub(crate) mod migration;
@@ -88,6 +90,31 @@ pub enum ServiceCommands {
     Status,
     /// Uninstall daemon service unit
     Uninstall,
+}
+
+/// Instance management subcommands (cluster mode; admin only for create/delete).
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InstanceCommands {
+    /// Create a new instance (allocates port, writes registry)
+    Create {
+        /// Instance id (alphanumeric; cannot be "admin")
+        id: String,
+        /// Preset name (optional)
+        #[arg(long)]
+        preset: Option<String>,
+    },
+    /// List all instances in the registry
+    List,
+    /// Soft-delete an instance (cannot delete admin)
+    Delete {
+        /// Instance id to delete
+        id: String,
+    },
+    /// Show status of an instance
+    Status {
+        /// Instance id
+        id: String,
+    },
 }
 
 /// Channel management subcommands

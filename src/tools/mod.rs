@@ -17,6 +17,7 @@
 
 pub mod browser;
 pub mod browser_open;
+pub mod ceo;
 pub mod cli_discovery;
 pub mod composio;
 pub mod content_search;
@@ -189,10 +190,14 @@ pub fn all_tools(
         agents,
         fallback_api_key,
         root_config,
+        None,
+        None,
+        None,
     )
 }
 
 /// Create full tool registry including memory tools and optional Composio.
+/// When `target_entity_id` is `Some("ceo")` and `entity_pool` is set, CEO tools are added.
 #[allow(clippy::implicit_hasher, clippy::too_many_arguments)]
 pub fn all_tools_with_runtime(
     config: Arc<Config>,
@@ -208,6 +213,9 @@ pub fn all_tools_with_runtime(
     agents: &HashMap<String, DelegateAgentConfig>,
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
+    target_entity_id: Option<&str>,
+    entity_pool: Option<std::sync::Arc<crate::entity::EntityPool>>,
+    agent_max: Option<u32>,
 ) -> Vec<Box<dyn Tool>> {
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ShellTool::new(security.clone(), runtime)),
@@ -343,6 +351,19 @@ pub fn all_tools_with_runtime(
         .with_parent_tools(parent_tools)
         .with_multimodal_config(root_config.multimodal.clone());
         tool_arcs.push(Arc::new(delegate_tool));
+    }
+
+    if target_entity_id == Some("ceo") {
+        if let Some(ref pool) = entity_pool {
+            let config_path = root_config.config_path.clone();
+            let workspace_dir = root_config.workspace_dir.clone();
+            tool_arcs.extend(ceo::ceo_tools(
+                Some(pool.clone()),
+                agent_max,
+                config_path,
+                workspace_dir,
+            ));
+        }
     }
 
     boxed_registry_from_arcs(tool_arcs)

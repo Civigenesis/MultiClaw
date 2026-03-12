@@ -217,6 +217,89 @@ pub struct Config {
     /// Voice transcription configuration (Whisper API via Groq).
     #[serde(default)]
     pub transcription: TranscriptionConfig,
+
+    /// Single-instance multi-entity configuration (preset, CEO, entities, teams, projects).
+    #[serde(default)]
+    pub instance: Option<InstanceConfig>,
+}
+
+// ── Instance (multi-entity) config ────────────────────────────────────────
+
+/// Preset for single-instance multi-entity organization.
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum InstancePreset {
+    #[default]
+    Startup,
+    Enterprise,
+    Brainstorm,
+    Freeform,
+    Project,
+}
+
+/// Single-instance multi-entity configuration (`[instance]`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct InstanceConfig {
+    /// Preset: startup | enterprise | brainstorm | freeform | project.
+    #[serde(default)]
+    pub preset: Option<String>,
+    /// Instance-level default provider override.
+    #[serde(default)]
+    pub default_provider: Option<String>,
+    /// Instance-level default model override.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// CEO entity configuration (entity_id=ceo).
+    #[serde(default)]
+    pub ceo: Option<CeoConfig>,
+    /// Entity definitions (id, provider/model override, team_id, role, skills).
+    #[serde(default)]
+    pub entities: Vec<EntityConfig>,
+    /// Teams (enterprise / project preset).
+    #[serde(default)]
+    pub teams: Vec<TeamConfig>,
+    /// Projects (project preset).
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
+}
+
+/// CEO entity configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct CeoConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// Per-entity configuration.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct EntityConfig {
+    pub id: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub team_id: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+}
+
+/// Team definition (enterprise / project).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TeamConfig {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Project definition (project preset).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectConfig {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Named provider profile definition compatible with Codex app-server style config.
@@ -1963,17 +2046,23 @@ impl Default for BuiltinHooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutonomyConfig {
     /// Autonomy level: `read_only`, `supervised` (default), or `full`.
+    #[serde(default)]
     pub level: AutonomyLevel,
     /// Restrict absolute filesystem paths to workspace-relative references. Default: `true`.
     /// Resolved paths outside the workspace still require `allowed_roots`.
+    #[serde(default = "default_true")]
     pub workspace_only: bool,
     /// Allowlist of executable names permitted for shell execution.
+    #[serde(default = "default_allowed_commands")]
     pub allowed_commands: Vec<String>,
     /// Explicit path denylist. Default includes system-critical paths and sensitive dotdirs.
+    #[serde(default = "default_forbidden_paths")]
     pub forbidden_paths: Vec<String>,
     /// Maximum actions allowed per hour per policy. Default: `100`.
+    #[serde(default = "default_max_actions_per_hour")]
     pub max_actions_per_hour: u32,
     /// Maximum cost per day in cents per policy. Default: `1000`.
+    #[serde(default = "default_max_cost_per_day_cents")]
     pub max_cost_per_day_cents: u32,
 
     /// Require explicit approval for medium-risk shell commands.
@@ -2019,6 +2108,55 @@ fn default_auto_approve() -> Vec<String> {
 
 fn default_always_ask() -> Vec<String> {
     vec![]
+}
+
+fn default_allowed_commands() -> Vec<String> {
+    vec![
+        "git".into(),
+        "npm".into(),
+        "cargo".into(),
+        "ls".into(),
+        "cat".into(),
+        "grep".into(),
+        "find".into(),
+        "echo".into(),
+        "pwd".into(),
+        "wc".into(),
+        "head".into(),
+        "tail".into(),
+        "date".into(),
+    ]
+}
+
+fn default_forbidden_paths() -> Vec<String> {
+    vec![
+        "/etc".into(),
+        "/root".into(),
+        "/home".into(),
+        "/usr".into(),
+        "/bin".into(),
+        "/sbin".into(),
+        "/lib".into(),
+        "/opt".into(),
+        "/boot".into(),
+        "/dev".into(),
+        "/proc".into(),
+        "/sys".into(),
+        "/var".into(),
+        "/tmp".into(),
+        "~/.ssh".into(),
+        "~/.gnupg".into(),
+        "~/.aws".into(),
+        "~/.config".into(),
+    ]
+}
+
+fn default_max_actions_per_hour() -> u32 {
+    20
+}
+
+fn default_max_cost_per_day_cents() -> u32 {
+    500
 }
 
 fn is_valid_env_var_name(name: &str) -> bool {
@@ -3629,6 +3767,7 @@ impl Default for Config {
             hardware: HardwareConfig::default(),
             query_classification: QueryClassificationConfig::default(),
             transcription: TranscriptionConfig::default(),
+            instance: None,
         }
     }
 }
@@ -3653,7 +3792,7 @@ fn default_config_dir() -> Result<PathBuf> {
 }
 
 /// Cluster root directory. Prefer `MULTICLAW_CLUSTER_ROOT` env, else `default_config_dir()`.
-pub(crate) fn cluster_root() -> Result<PathBuf> {
+pub fn cluster_root() -> Result<PathBuf> {
     if let Ok(v) = std::env::var("MULTICLAW_CLUSTER_ROOT") {
         let v = v.trim();
         if !v.is_empty() {
@@ -3664,7 +3803,7 @@ pub(crate) fn cluster_root() -> Result<PathBuf> {
 }
 
 /// True when running in cluster layout: `instances.json` exists or `instances/` is a directory.
-pub(crate) fn is_cluster_mode(cluster_root: &Path) -> bool {
+pub fn is_cluster_mode(cluster_root: &Path) -> bool {
     cluster_root.join("instances.json").exists()
         || cluster_root.join("instances").is_dir()
 }
@@ -4172,6 +4311,63 @@ impl Config {
             );
             Ok(config)
         }
+    }
+
+    /// Load config from an existing config file path (e.g. for CEO tools to mutate and save).
+    /// Does not apply env overrides. Decrypts secrets so that save() can re-encrypt correctly.
+    pub async fn load_from_path(config_path: &std::path::Path) -> Result<Self> {
+        let contents = fs::read_to_string(config_path)
+            .await
+            .context("Failed to read config file")?;
+        let mut ignored_paths: Vec<String> = Vec::new();
+        let mut config: Config = serde_ignored::deserialize(
+            toml::de::Deserializer::parse(&contents).context("Failed to parse config file")?,
+            |path| ignored_paths.push(path.to_string()),
+        )
+        .context("Failed to deserialize config file")?;
+
+        let multiclaw_dir = config_path
+            .parent()
+            .context("Config path must have a parent directory")?;
+        let workspace_dir = multiclaw_dir.join("workspace");
+        config.config_path = config_path.to_path_buf();
+        config.workspace_dir = workspace_dir;
+
+        let store = crate::security::SecretStore::new(multiclaw_dir, config.secrets.encrypt);
+        decrypt_optional_secret(&store, &mut config.api_key, "config.api_key")?;
+        decrypt_optional_secret(
+            &store,
+            &mut config.composio.api_key,
+            "config.composio.api_key",
+        )?;
+        decrypt_optional_secret(
+            &store,
+            &mut config.browser.computer_use.api_key,
+            "config.browser.computer_use.api_key",
+        )?;
+        decrypt_optional_secret(
+            &store,
+            &mut config.web_search.brave_api_key,
+            "config.web_search.brave_api_key",
+        )?;
+        decrypt_optional_secret(
+            &store,
+            &mut config.storage.provider.config.db_url,
+            "config.storage.provider.config.db_url",
+        )?;
+        for agent in config.agents.values_mut() {
+            decrypt_optional_secret(&store, &mut agent.api_key, "config.agents.*.api_key")?;
+        }
+        if let Some(ref mut ns) = config.channels_config.nostr {
+            decrypt_secret(
+                &store,
+                &mut ns.private_key,
+                "config.channels_config.nostr.private_key",
+            )?;
+        }
+
+        config.validate()?;
+        Ok(config)
     }
 
     fn lookup_model_provider_profile(
@@ -4909,6 +5105,67 @@ mod tests {
     }
 
     #[test]
+    async fn instance_config_deserializes_from_toml() {
+        let toml = r#"
+default_temperature = 0.7
+
+[instance]
+preset = "enterprise"
+default_provider = "openai"
+default_model = "gpt-4"
+
+[instance.ceo]
+enabled = true
+
+[[instance.entities]]
+id = "writer"
+provider = "openai"
+model = "gpt-4"
+team_id = "content"
+role = "writer"
+skills = ["file", "web"]
+
+[[instance.entities]]
+id = "reviewer"
+team_id = "content"
+
+[[instance.teams]]
+id = "content"
+name = "Content Team"
+
+[[instance.projects]]
+id = "docs"
+name = "Docs"
+"#;
+        let config: Config = toml::from_str(toml).expect("instance section should deserialize");
+        let inst = config.instance.as_ref().expect("instance should be present");
+        assert_eq!(inst.preset.as_deref(), Some("enterprise"));
+        assert_eq!(inst.default_provider.as_deref(), Some("openai"));
+        assert_eq!(inst.default_model.as_deref(), Some("gpt-4"));
+        assert!(inst.ceo.is_some());
+        assert_eq!(inst.entities.len(), 2);
+        assert_eq!(inst.entities[0].id, "writer");
+        assert_eq!(inst.entities[0].provider.as_deref(), Some("openai"));
+        assert_eq!(inst.entities[0].skills.as_ref().map(|s| s.len()), Some(2));
+        assert_eq!(inst.entities[1].id, "reviewer");
+        assert_eq!(inst.teams.len(), 1);
+        assert_eq!(inst.teams[0].id, "content");
+        assert_eq!(inst.projects.len(), 1);
+        assert_eq!(inst.projects[0].id, "docs");
+    }
+
+    #[test]
+    async fn config_without_instance_has_none_instance() {
+        let toml = r#"
+default_provider = "ollama"
+default_model = "llama3"
+default_temperature = 0.7
+"#;
+        let config: Config = toml::from_str(toml).expect("minimal config should deserialize");
+        assert!(config.instance.is_none());
+    }
+
+    #[test]
     async fn config_dir_creation_error_mentions_openrc_and_path() {
         let msg = config_dir_creation_error(Path::new("/etc/multiclaw"));
         assert!(msg.contains("/etc/multiclaw"));
@@ -5197,6 +5454,7 @@ default_temperature = 0.7
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
+            instance: None,
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -5379,6 +5637,7 @@ tool_dispatcher = "xml"
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
+            instance: None,
         };
 
         config.save().await.unwrap();

@@ -241,6 +241,7 @@ impl Tool for CronAddTool {
                     schedule,
                     prompt,
                     session_target,
+                    None, // target (ceo or entity_id); config/CLI can add later
                     model,
                     delivery,
                     delete_after_run,

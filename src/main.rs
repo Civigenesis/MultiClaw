@@ -60,6 +60,7 @@ mod cost;
 mod cron;
 mod daemon;
 mod doctor;
+mod entity;
 mod gateway;
 mod hardware;
 mod health;
@@ -90,8 +91,8 @@ use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use multiclaw::{
-    ChannelCommands, CronCommands, HardwareCommands, IntegrationCommands, MigrateCommands,
-    PeripheralCommands, ServiceCommands, SkillCommands,
+    ChannelCommands, CronCommands, HardwareCommands, InstanceCommands, IntegrationCommands,
+    MigrateCommands, PeripheralCommands, ServiceCommands, SkillCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -201,6 +202,10 @@ Examples:
         /// Attach a peripheral (board:path, e.g. nucleo-f401re:/dev/ttyACM0)
         #[arg(long)]
         peripheral: Vec<String>,
+
+        /// Target entity ID for multi-entity instances (e.g. ceo, market_analyst)
+        #[arg(long)]
+        entity: Option<String>,
     },
 
     /// Start the gateway server (webhooks, websockets)
@@ -332,6 +337,23 @@ Examples:
 
     /// List supported AI providers
     Providers,
+
+    /// Manage cluster instances (create, list, delete; admin only for create/delete)
+    #[command(long_about = "\
+Manage cluster instances.
+
+Requires cluster mode (instances.json at cluster root). Create and delete \
+are allowed only when running as admin instance (e.g. multiclaw --instance admin).
+
+Examples:
+  multiclaw instance list
+  multiclaw --instance admin instance create worker1 --preset default
+  multiclaw --instance admin instance delete worker1
+  multiclaw instance status worker1")]
+    Instance {
+        #[command(subcommand)]
+        instance_command: InstanceCommands,
+    },
 
     /// Manage channels (telegram, discord, slack)
     #[command(long_about = "\
@@ -782,6 +804,7 @@ async fn main() -> Result<()> {
             model,
             temperature,
             peripheral,
+            entity,
         } => agent::run(
             config,
             message,
@@ -790,6 +813,7 @@ async fn main() -> Result<()> {
             temperature,
             peripheral,
             true,
+            entity,
         )
         .await
         .map(|_| ()),
@@ -1002,6 +1026,10 @@ async fn main() -> Result<()> {
             None => doctor::run(&config),
         },
 
+        Commands::Instance { instance_command } => {
+            run_instance_command(instance_command, &config).await
+        }
+
         Commands::Channel { channel_command } => match channel_command {
             ChannelCommands::Start => channels::start_channels(config).await,
             ChannelCommands::Doctor => channels::doctor_channels(config).await,
@@ -1043,6 +1071,82 @@ async fn main() -> Result<()> {
             }
         },
     }
+}
+
+async fn run_instance_command(
+    instance_command: InstanceCommands,
+    config: &Config,
+) -> Result<()> {
+    let root = multiclaw::config::schema::cluster_root()?;
+    if !multiclaw::config::schema::is_cluster_mode(&root) {
+        bail!(
+            "Instance commands require cluster mode. Create instances.json or instances/ at {}",
+            root.display()
+        );
+    }
+    let is_admin = multiclaw::instance_manager::is_admin_instance(&config.config_path);
+
+    match instance_command {
+        InstanceCommands::Create { id, preset } => {
+            if !is_admin {
+                bail!("Only admin instance can create instances. Run with --instance admin.");
+            }
+            let entry = multiclaw::instance_manager::instance_create(
+                &root,
+                &id,
+                multiclaw::instance_registry::InstanceRole::Normal,
+                preset.as_deref(),
+            )
+            .await?;
+            println!(
+                "Created instance '{}' (port {}, workspace: {})",
+                entry.id,
+                entry.gateway_port.unwrap_or(0),
+                entry.workspace_path.as_deref().unwrap_or("—")
+            );
+        }
+        InstanceCommands::List => {
+            let list = multiclaw::instance_manager::instance_list(&root).await?;
+            if list.is_empty() {
+                println!("No instances in registry.");
+                return Ok(());
+            }
+            println!("{:<12} {:<8} {:<10} {:>6}", "ID", "ROLE", "STATUS", "PORT");
+            println!("{}", "—".repeat(40));
+            for e in &list {
+                let port = e.gateway_port.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string());
+                println!(
+                    "{:<12} {:<8} {:<10} {:>6}",
+                    e.id,
+                    format!("{:?}", e.role).to_lowercase(),
+                    format!("{:?}", e.status).to_lowercase(),
+                    port
+                );
+            }
+        }
+        InstanceCommands::Delete { id } => {
+            if !is_admin {
+                bail!("Only admin instance can delete instances. Run with --instance admin.");
+            }
+            multiclaw::instance_manager::instance_delete(&root, &id).await?;
+            println!("Deleted instance '{id}' (soft).");
+        }
+        InstanceCommands::Status { id } => {
+            let entry = multiclaw::instance_manager::instance_status(&root, &id).await?;
+            match entry {
+                Some(e) => {
+                    println!("Instance: {}", e.id);
+                    println!("  Role:   {:?}", e.role);
+                    println!("  Status: {:?}", e.status);
+                    println!("  Port:   {:?}", e.gateway_port);
+                    println!("  Config: {}", e.config_path.as_deref().unwrap_or("—"));
+                    println!("  Workspace: {}", e.workspace_path.as_deref().unwrap_or("—"));
+                }
+                None => bail!("Instance '{id}' not found or deleted."),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_estop_command(

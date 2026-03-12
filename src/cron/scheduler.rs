@@ -165,6 +165,7 @@ async fn run_agent_job(
     let prefixed_prompt = format!("[cron:{} {name}] {prompt}", job.id);
     let model_override = job.model.clone();
 
+    let target_entity_id = job.target.clone();
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
             crate::agent::run(
@@ -175,6 +176,7 @@ async fn run_agent_job(
                 config.default_temperature,
                 vec![],
                 false,
+                target_entity_id,
             )
             .await
         }
@@ -495,6 +497,7 @@ mod tests {
             name: None,
             job_type: JobType::Shell,
             session_target: SessionTarget::Isolated,
+            target: None,
             model: None,
             enabled: true,
             delivery: DeliveryConfig::default(),
@@ -819,6 +822,7 @@ mod tests {
             SessionTarget::Isolated,
             None,
             None,
+            None,
             true,
         )
         .unwrap();
@@ -842,6 +846,7 @@ mod tests {
             crate::cron::Schedule::At { at },
             "Hello",
             SessionTarget::Isolated,
+            None,
             None,
             None,
             true,
@@ -904,6 +909,7 @@ mod tests {
             "deliver this",
             SessionTarget::Isolated,
             None,
+            None,
             Some(DeliveryConfig {
                 mode: "announce".into(),
                 channel: Some("telegram".into()),
@@ -942,6 +948,7 @@ mod tests {
             "deliver this",
             SessionTarget::Isolated,
             None,
+            None,
             Some(DeliveryConfig {
                 mode: "announce".into(),
                 channel: Some("telegram".into()),
@@ -977,6 +984,7 @@ mod tests {
             crate::cron::Schedule::At { at },
             "Hello",
             SessionTarget::Isolated,
+            None,
             None,
             None,
             false,

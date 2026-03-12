@@ -111,6 +111,9 @@ pub struct CronJob {
     pub name: Option<String>,
     pub job_type: JobType,
     pub session_target: SessionTarget,
+    /// For Agent jobs: run as this entity ("ceo" or entity_id). None = single-entity mode.
+    #[serde(default)]
+    pub target: Option<String>,
     pub model: Option<String>,
     pub enabled: bool,
     pub delivery: DeliveryConfig,
@@ -143,6 +146,7 @@ pub struct CronJobPatch {
     pub delivery: Option<DeliveryConfig>,
     pub model: Option<String>,
     pub session_target: Option<SessionTarget>,
+    pub target: Option<String>,
     pub delete_after_run: Option<bool>,
 }
 

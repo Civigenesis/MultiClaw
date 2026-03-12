@@ -170,6 +170,7 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         hardware: hardware_config,
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        instance: None,
     };
 
     println!(
@@ -521,6 +522,7 @@ async fn run_quick_setup_with_home(
         hardware: crate::config::HardwareConfig::default(),
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        instance: None,
     };
 
     config.save().await?;
@@ -2072,9 +2074,20 @@ const ADMIN_INSTANCE_ID: &str = "admin";
 const ADMIN_GATEWAY_PORT: u16 = 42617;
 
 /// Minimal config.toml for a new admin instance.
-const MINIMAL_ADMIN_CONFIG: &str = r#"[gateway]
+/// require_pairing=false and secrets.encrypt=false avoid pairing-code loss and
+/// allow config copy between instances (e.g. admin → worker).
+const MINIMAL_ADMIN_CONFIG: &str = r#"default_temperature = 0.7
+
+[gateway]
 port = 42617
 host = "127.0.0.1"
+require_pairing = false
+
+[secrets]
+encrypt = false
+
+[channels_config]
+cli = true
 "#;
 
 /// Ensure cluster has an admin instance: create instances/admin and register if missing.

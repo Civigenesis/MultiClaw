@@ -66,6 +66,25 @@ pub struct CronAddBody {
     pub command: String,
 }
 
+/// Body for POST /api/report (instance → admin).
+#[derive(Deserialize)]
+pub struct ReportBody {
+    pub instance_id: String,
+    #[serde(rename = "type")]
+    pub report_type: String,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Body for POST /api/admin-message (admin → instance CEO).
+#[derive(Deserialize)]
+pub struct AdminMessageBody {
+    pub instance_id: String,
+    pub message_type: String,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+}
+
 // ── Handlers ────────────────────────────────────────────────────
 
 /// GET /api/status — system status overview
@@ -516,6 +535,170 @@ pub async fn handle_api_health(
 
     let snapshot = crate::health::snapshot();
     Json(serde_json::json!({"health": snapshot})).into_response()
+}
+
+/// POST /api/report — instance reports to admin (progress/alert). Requires auth.
+pub async fn handle_api_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReportBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let state_dir = config.workspace_dir.join("state");
+    if let Err(e) = tokio::fs::create_dir_all(&state_dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create state dir: {e}")})),
+        )
+            .into_response();
+    }
+    let reports_path = state_dir.join("reports.jsonl");
+    let line = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "instance_id": body.instance_id,
+        "type": body.report_type,
+        "payload": body.payload,
+    });
+    let line_str = match serde_json::to_string(&line) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Invalid payload: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&reports_path)
+        .await
+    {
+        Ok(mut f) => {
+            use tokio::io::AsyncWriteExt;
+            if let Err(e) = f.write_all(format!("{line_str}\n").as_bytes()).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Failed to write report: {e}")})),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to open reports file: {e}")})),
+            )
+                .into_response();
+        }
+    }
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
+}
+
+/// POST /api/admin-message — admin sends message to an instance (CEO inbox). Admin gateway only.
+pub async fn handle_api_admin_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminMessageBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let path_str = config.config_path.to_string_lossy();
+    let is_admin = path_str.contains("instances")
+        && path_str.contains("admin")
+        && config.config_path.ends_with("config.toml");
+    if !is_admin {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "admin-message is only accepted on the admin instance gateway"
+            })),
+        )
+            .into_response();
+    }
+
+    let cluster_root = config
+        .config_path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent());
+    let Some(root) = cluster_root else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Could not resolve cluster root from config path"})),
+        )
+            .into_response();
+    };
+
+    let instance_id = body.instance_id.trim();
+    if instance_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "instance_id is required"})),
+        )
+            .into_response();
+    }
+    let state_dir = root
+        .join("instances")
+        .join(instance_id)
+        .join("workspace")
+        .join("state");
+    if let Err(e) = tokio::fs::create_dir_all(&state_dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create instance state dir: {e}")})),
+        )
+            .into_response();
+    }
+    let messages_path = state_dir.join("admin_messages.jsonl");
+    let line = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "message_type": body.message_type,
+        "payload": body.payload,
+    });
+    let line_str = match serde_json::to_string(&line) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Invalid payload: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&messages_path)
+        .await
+    {
+        Ok(mut f) => {
+            use tokio::io::AsyncWriteExt;
+            if let Err(e) = f.write_all(format!("{line_str}\n").as_bytes()).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Failed to write admin message: {e}")})),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to open admin_messages file: {e}")})),
+            )
+                .into_response();
+        }
+    }
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
