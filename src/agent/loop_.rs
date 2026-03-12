@@ -2731,6 +2731,7 @@ pub async fn run(
     temperature: f64,
     peripheral_overrides: Vec<String>,
     interactive: bool,
+    target_entity_id: Option<String>,
 ) -> Result<String> {
     // ── Wire up agnostic subsystems ──────────────────────────────
     let base_observer = observability::create_observer(&config.observability);
@@ -2759,6 +2760,22 @@ pub async fn run(
         );
     }
 
+    // ── Multi-entity: pool and effective provider/model overrides ─
+    let entity_pool = crate::entity::EntityPool::from_config(&config);
+    let (effective_provider_override, effective_model_override) =
+        if let (Some(ref pool), Some(ref eid)) = (&entity_pool, &target_entity_id) {
+            if let Some(entity) = pool.get(eid) {
+                (
+                    entity.provider_override.clone().or(provider_override.clone()),
+                    entity.model_override.clone().or(model_override.clone()),
+                )
+            } else {
+                (provider_override.clone(), model_override.clone())
+            }
+        } else {
+            (provider_override.clone(), model_override.clone())
+        };
+
     // ── Tools (including memory tools and peripherals) ────────────
     let (composio_key, composio_entity_id) = if config.composio.enabled {
         (
@@ -2782,6 +2799,9 @@ pub async fn run(
         &config.agents,
         config.api_key.as_deref(),
         &config,
+        target_entity_id.as_deref(),
+        entity_pool.clone(),
+        None, // agent_max from instance constraints when available
     );
 
     let peripheral_tools: Vec<Box<dyn Tool>> =
@@ -2791,16 +2811,32 @@ pub async fn run(
         tools_registry.extend(peripheral_tools);
     }
 
-    // ── Resolve provider ─────────────────────────────────────────
-    let provider_name = provider_override
+    // ── Resolve provider/model: CLI/entity override > [instance] > top-level; no silent fallback ─
+    let instance_provider = config
+        .instance
+        .as_ref()
+        .and_then(|i| i.default_provider.as_deref());
+    let instance_model = config
+        .instance
+        .as_ref()
+        .and_then(|i| i.default_model.as_deref());
+    let provider_name = effective_provider_override
         .as_deref()
-        .or(config.default_provider.as_deref())
-        .unwrap_or("openrouter");
-
-    let model_name = model_override
+        .or(instance_provider)
+        .or(config.default_provider.as_deref());
+    let model_name = effective_model_override
         .as_deref()
-        .or(config.default_model.as_deref())
-        .unwrap_or("anthropic/claude-sonnet-4");
+        .or(instance_model)
+        .or(config.default_model.as_deref());
+    let (provider_name, model_name) = match (provider_name, model_name) {
+        (Some(p), Some(m)) => (p, m.to_string()),
+        (None, _) => anyhow::bail!(
+            "default_provider is not set. Set it in config.toml (top-level or [instance]) or set MULTICLAW_PROVIDER."
+        ),
+        (Some(_), None) => anyhow::bail!(
+            "default_model is not set. Set it in config.toml (top-level or [instance]) or set MULTICLAW_MODEL."
+        ),
+    };
 
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
@@ -2816,13 +2852,13 @@ pub async fn run(
         config.api_url.as_deref(),
         &config.reliability,
         &config.model_routes,
-        model_name,
+        &model_name,
         &provider_runtime_options,
     )?;
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),
-        model: model_name.to_string(),
+        model: model_name.clone(),
     });
 
     // ── Hardware RAG (datasheet retrieval when peripherals + datasheet_dir) ──
@@ -2844,6 +2880,19 @@ pub async fn run(
         .iter()
         .map(|b| b.board.clone())
         .collect();
+
+    // ── Prompt workspace: entity-specific when target_entity_id set (for independent persona) ──
+    let effective_prompt_workspace: std::path::PathBuf =
+        if let Some(ref eid) = target_entity_id {
+            let entity_dir = crate::entity::entity_workspace_dir(&config.workspace_dir, eid);
+            if entity_dir.exists() {
+                entity_dir
+            } else {
+                config.workspace_dir.clone()
+            }
+        } else {
+            config.workspace_dir.clone()
+        };
 
     // ── Build system prompt from workspace MD files (OpenClaw framework) ──
     let skills = crate::skills::load_skills_with_config(&config.workspace_dir, &config);
@@ -2962,8 +3011,8 @@ pub async fn run(
     };
     let native_tools = provider.supports_native_tools();
     let mut system_prompt = crate::channels::build_system_prompt_with_mode(
-        &config.workspace_dir,
-        model_name,
+        &effective_prompt_workspace,
+        &model_name,
         &tool_descs,
         &skills,
         Some(&config.identity),
@@ -3026,7 +3075,7 @@ pub async fn run(
             &tools_registry,
             observer.as_ref(),
             provider_name,
-            model_name,
+            &model_name,
             temperature,
             false,
             approval_manager.as_ref(),
@@ -3148,7 +3197,7 @@ pub async fn run(
                 &tools_registry,
                 observer.as_ref(),
                 provider_name,
-                model_name,
+                &model_name,
                 temperature,
                 false,
                 approval_manager.as_ref(),
@@ -3183,7 +3232,7 @@ pub async fn run(
             if let Ok(compacted) = auto_compact_history(
                 &mut history,
                 provider.as_ref(),
-                model_name,
+                &model_name,
                 config.agent.max_history_messages,
             )
             .await
@@ -3250,16 +3299,33 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         &config.agents,
         config.api_key.as_deref(),
         &config,
+        None,
+        None,
+        None,
     );
     let peripheral_tools: Vec<Box<dyn Tool>> =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;
     tools_registry.extend(peripheral_tools);
 
-    let provider_name = config.default_provider.as_deref().unwrap_or("openrouter");
-    let model_name = config
-        .default_model
-        .clone()
-        .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
+    let instance_provider = config
+        .instance
+        .as_ref()
+        .and_then(|i| i.default_provider.as_deref());
+    let instance_model = config.instance.as_ref().and_then(|i| i.default_model.clone());
+    let provider_name = instance_provider
+        .or(config.default_provider.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "default_provider is not set. Set it in config.toml (top-level or [instance]) or set MULTICLAW_PROVIDER."
+            )
+        })?;
+    let model_name = instance_model
+        .or(config.default_model.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "default_model is not set. Set it in config.toml (top-level or [instance]) or set MULTICLAW_MODEL."
+            )
+        })?;
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
         provider_api_url: config.api_url.clone(),
