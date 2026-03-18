@@ -35,6 +35,10 @@
     dead_code
 )]
 
+// Allow referring to this crate as `multiclaw::...` from shared modules that are also
+// compiled in the binary crate (where `crate::...` would point at the bin root).
+extern crate self as multiclaw;
+
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
@@ -54,8 +58,8 @@ pub(crate) mod health;
 pub(crate) mod heartbeat;
 pub mod hooks;
 pub(crate) mod identity;
-pub mod instance_registry;
 pub mod instance_manager;
+pub mod instance_registry;
 pub(crate) mod integrations;
 pub mod memory;
 pub(crate) mod migration;

@@ -13,14 +13,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
 
-/// Lists entities and instance status (CEO only).
+/// Lists entities and teams in this instance (CEO only). Uses config_path when set to include teams from config.
 pub struct InstanceStatusTool {
     entity_pool: Option<Arc<EntityPool>>,
+    config_path: Option<PathBuf>,
 }
 
 impl InstanceStatusTool {
-    pub fn new(entity_pool: Option<Arc<EntityPool>>) -> Self {
-        Self { entity_pool }
+    pub fn new(entity_pool: Option<Arc<EntityPool>>, config_path: Option<PathBuf>) -> Self {
+        Self {
+            entity_pool,
+            config_path,
+        }
     }
 }
 
@@ -31,7 +35,7 @@ impl Tool for InstanceStatusTool {
     }
 
     fn description(&self) -> &str {
-        "List all entities in this instance and their status (CEO only)."
+        "List all entities and teams in this instance (CEO only). Use to see current members and teams before create_team/create_entity or assign_task."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -53,18 +57,30 @@ impl Tool for InstanceStatusTool {
                 });
             }
         };
-        let ids = pool.list();
-        let summary = format!(
+        let entity_ids = pool.list();
+        let entities_line = format!(
             "entities: {}",
-            if ids.is_empty() {
+            if entity_ids.is_empty() {
                 "none".to_string()
             } else {
-                ids.join(", ")
+                entity_ids.join(", ")
             }
         );
+        let mut parts = vec![entities_line];
+        if let Some(ref path) = self.config_path {
+            if let Ok(config) = Config::load_from_path(path).await {
+                if let Some(ref inst) = config.instance {
+                    if !inst.teams.is_empty() {
+                        let team_ids: Vec<&str> =
+                            inst.teams.iter().map(|t| t.id.as_str()).collect();
+                        parts.push(format!("teams: {}", team_ids.join(", ")));
+                    }
+                }
+            }
+        }
         Ok(ToolResult {
             success: true,
-            output: summary,
+            output: parts.join("\n"),
             error: None,
         })
     }
@@ -146,9 +162,8 @@ impl Tool for CreateEntityTool {
                 });
             }
         };
-        let args: CreateEntityArgs = serde_json::from_value(args).map_err(|e| {
-            anyhow::anyhow!("invalid create_entity arguments: {}", e)
-        })?;
+        let args: CreateEntityArgs = serde_json::from_value(args)
+            .map_err(|e| anyhow::anyhow!("invalid create_entity arguments: {}", e))?;
         let id = args.id.trim();
         if id.is_empty() {
             return Ok(ToolResult {
@@ -202,7 +217,10 @@ impl Tool for CreateEntityTool {
             skills: args.skills,
         };
         instance.entities.push(entity_config.clone());
-        config.save().await.context("save config after create_entity")?;
+        config
+            .save()
+            .await
+            .context("save config after create_entity")?;
 
         let entity_dir = entity_workspace_dir(&self.workspace_dir, id);
         fs::create_dir_all(&entity_dir)
@@ -320,7 +338,10 @@ impl Tool for CreateTeamTool {
             id: id.to_string(),
             name: args.name.filter(|s| !s.trim().is_empty()),
         });
-        config.save().await.context("save config after create_team")?;
+        config
+            .save()
+            .await
+            .context("save config after create_team")?;
 
         let team_dir = team_workspace_dir(&self.workspace_dir, id);
         fs::create_dir_all(&team_dir)
@@ -329,7 +350,11 @@ impl Tool for CreateTeamTool {
 
         Ok(ToolResult {
             success: true,
-            output: format!("team '{}' created and persisted to config; workspace at {}", id, team_dir.display()),
+            output: format!(
+                "team '{}' created and persisted to config; workspace at {}",
+                id,
+                team_dir.display()
+            ),
             error: None,
         })
     }
@@ -373,7 +398,8 @@ impl Tool for AssignTaskTool {
     async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
         Ok(ToolResult {
             success: true,
-            output: "assign_task: task delivery will be implemented with MessageBus in phase 3.".to_string(),
+            output: "assign_task: task delivery will be implemented with MessageBus in phase 3."
+                .to_string(),
             error: None,
         })
     }
@@ -387,8 +413,12 @@ pub fn ceo_tools(
     config_path: PathBuf,
     workspace_dir: PathBuf,
 ) -> Vec<Arc<dyn Tool>> {
+    let config_path_opt = Some(config_path.clone());
     vec![
-        Arc::new(InstanceStatusTool::new(entity_pool.clone())),
+        Arc::new(InstanceStatusTool::new(
+            entity_pool.clone(),
+            config_path_opt,
+        )),
         Arc::new(CreateEntityTool::new(
             entity_pool.clone(),
             agent_max,
@@ -407,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn instance_status_returns_error_when_no_pool() {
-        let tool = InstanceStatusTool::new(None);
+        let tool = InstanceStatusTool::new(None, None);
         let r = tool.execute(json!({})).await.unwrap();
         assert!(!r.success);
         assert!(r.error.unwrap_or_default().contains("multi-entity"));
@@ -423,22 +453,21 @@ mod tests {
                 ceo: Some(crate::config::CeoConfig {
                     enabled: Some(true),
                 }),
-                entities: vec![
-                    EntityConfig {
-                        id: "writer".to_string(),
-                        provider: None,
-                        model: None,
-                        team_id: None,
-                        role: None,
-                        skills: None,
-                    },
-                ],
+                entities: vec![EntityConfig {
+                    id: "writer".to_string(),
+                    provider: None,
+                    model: None,
+                    team_id: None,
+                    role: None,
+                    skills: None,
+                }],
                 teams: vec![],
                 projects: vec![],
             }),
             ..Config::default()
-        }).unwrap();
-        let tool = InstanceStatusTool::new(Some(pool));
+        })
+        .unwrap();
+        let tool = InstanceStatusTool::new(Some(pool), None);
         let r = tool.execute(json!({})).await.unwrap();
         assert!(r.success);
         assert!(r.output.contains("ceo"));
@@ -460,17 +489,15 @@ mod tests {
                 projects: vec![],
             }),
             ..Config::default()
-        }).unwrap();
+        })
+        .unwrap();
         let tool = CreateEntityTool::new(
             Some(pool),
             Some(10),
             PathBuf::from("/nonexistent/config.toml"),
             PathBuf::from("/nonexistent/workspace"),
         );
-        let r = tool
-            .execute(json!({ "id": "ceo" }))
-            .await
-            .unwrap();
+        let r = tool.execute(json!({ "id": "ceo" })).await.unwrap();
         assert!(!r.success);
         assert!(r.error.unwrap_or_default().contains("reserved"));
     }
@@ -505,7 +532,8 @@ enabled = true
                 projects: vec![],
             }),
             ..Config::default()
-        }).unwrap();
+        })
+        .unwrap();
         let tool = CreateEntityTool::new(
             Some(pool.clone()),
             Some(2),

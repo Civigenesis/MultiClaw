@@ -357,10 +357,7 @@ impl Provider for OpenRouterProvider {
             .http_client()
             .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {credential}"))
-            .header(
-                "HTTP-Referer",
-                "https://github.com/Civigenesis/MultiClaw",
-            )
+            .header("HTTP-Referer", "https://github.com/Civigenesis/MultiClaw")
             .header("X-Title", "MultiClaw")
             .json(&request)
             .send()
@@ -407,10 +404,7 @@ impl Provider for OpenRouterProvider {
             .http_client()
             .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {credential}"))
-            .header(
-                "HTTP-Referer",
-                "https://github.com/Civigenesis/MultiClaw",
-            )
+            .header("HTTP-Referer", "https://github.com/Civigenesis/MultiClaw")
             .header("X-Title", "MultiClaw")
             .json(&request)
             .send()
@@ -455,10 +449,7 @@ impl Provider for OpenRouterProvider {
             .http_client()
             .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {credential}"))
-            .header(
-                "HTTP-Referer",
-                "https://github.com/Civigenesis/MultiClaw",
-            )
+            .header("HTTP-Referer", "https://github.com/Civigenesis/MultiClaw")
             .header("X-Title", "MultiClaw")
             .json(&native_request)
             .send()
@@ -549,10 +540,7 @@ impl Provider for OpenRouterProvider {
             .http_client()
             .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {credential}"))
-            .header(
-                "HTTP-Referer",
-                "https://github.com/Civigenesis/MultiClaw",
-            )
+            .header("HTTP-Referer", "https://github.com/Civigenesis/MultiClaw")
             .header("X-Title", "MultiClaw")
             .json(&native_request)
             .send()

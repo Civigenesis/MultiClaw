@@ -39,13 +39,19 @@ impl PrometheusObserver {
         .expect("valid metric");
 
         let llm_requests = IntCounterVec::new(
-            prometheus::Opts::new("multiclaw_llm_requests_total", "Total LLM provider requests"),
+            prometheus::Opts::new(
+                "multiclaw_llm_requests_total",
+                "Total LLM provider requests",
+            ),
             &["provider", "model", "success"],
         )
         .expect("valid metric");
 
         let tokens_input_total = IntCounterVec::new(
-            prometheus::Opts::new("multiclaw_tokens_input_total", "Total input tokens consumed"),
+            prometheus::Opts::new(
+                "multiclaw_tokens_input_total",
+                "Total input tokens consumed",
+            ),
             &["provider", "model"],
         )
         .expect("valid metric");

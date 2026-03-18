@@ -104,8 +104,8 @@ impl InstanceRegistry {
                 .await
                 .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
         }
-        let contents = serde_json::to_string_pretty(self)
-            .context("Failed to serialize instance registry")?;
+        let contents =
+            serde_json::to_string_pretty(self).context("Failed to serialize instance registry")?;
         fs::write(&path, contents)
             .await
             .with_context(|| format!("Failed to write instance registry: {}", path.display()))?;
@@ -138,9 +138,7 @@ impl InstanceRegistry {
 
     /// Allocated gateway ports (for port pool).
     pub fn allocated_ports(&self) -> impl Iterator<Item = u16> + '_ {
-        self.instances
-            .iter()
-            .filter_map(|e| e.gateway_port)
+        self.instances.iter().filter_map(|e| e.gateway_port)
     }
 }
 

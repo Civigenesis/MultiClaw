@@ -1003,7 +1003,12 @@ async fn main() -> Result<()> {
             service_init,
         } => {
             let init_system = service_init.parse()?;
-            service::handle_command(&service_command, &config, init_system, cli.instance.as_deref())
+            service::handle_command(
+                &service_command,
+                &config,
+                init_system,
+                cli.instance.as_deref(),
+            )
         }
 
         Commands::Doctor { doctor_command } => match doctor_command {
@@ -1073,10 +1078,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_instance_command(
-    instance_command: InstanceCommands,
-    config: &Config,
-) -> Result<()> {
+async fn run_instance_command(instance_command: InstanceCommands, config: &Config) -> Result<()> {
     let root = multiclaw::config::schema::cluster_root()?;
     if !multiclaw::config::schema::is_cluster_mode(&root) {
         bail!(
@@ -1114,7 +1116,10 @@ async fn run_instance_command(
             println!("{:<12} {:<8} {:<10} {:>6}", "ID", "ROLE", "STATUS", "PORT");
             println!("{}", "—".repeat(40));
             for e in &list {
-                let port = e.gateway_port.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string());
+                let port = e
+                    .gateway_port
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "—".to_string());
                 println!(
                     "{:<12} {:<8} {:<10} {:>6}",
                     e.id,
@@ -1140,7 +1145,10 @@ async fn run_instance_command(
                     println!("  Status: {:?}", e.status);
                     println!("  Port:   {:?}", e.gateway_port);
                     println!("  Config: {}", e.config_path.as_deref().unwrap_or("—"));
-                    println!("  Workspace: {}", e.workspace_path.as_deref().unwrap_or("—"));
+                    println!(
+                        "  Workspace: {}",
+                        e.workspace_path.as_deref().unwrap_or("—")
+                    );
                 }
                 None => bail!("Instance '{id}' not found or deleted."),
             }

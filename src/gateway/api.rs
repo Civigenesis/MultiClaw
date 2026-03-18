@@ -685,7 +685,9 @@ pub async fn handle_api_admin_message(
             if let Err(e) = f.write_all(format!("{line_str}\n").as_bytes()).await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Failed to write admin message: {e}")})),
+                    Json(
+                        serde_json::json!({"error": format!("Failed to write admin message: {e}")}),
+                    ),
                 )
                     .into_response();
             }

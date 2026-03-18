@@ -9,8 +9,6 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::json;
-use std::sync::{Arc, Mutex};
 use multiclaw::agent::agent::Agent;
 use multiclaw::agent::dispatcher::NativeToolDispatcher;
 use multiclaw::config::MemoryConfig;
@@ -19,6 +17,8 @@ use multiclaw::memory::Memory;
 use multiclaw::observability::{NoopObserver, Observer};
 use multiclaw::providers::{ChatRequest, ChatResponse, Provider, ToolCall};
 use multiclaw::tools::{Tool, ToolResult};
+use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock infrastructure

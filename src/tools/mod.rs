@@ -366,6 +366,17 @@ pub fn all_tools_with_runtime(
         }
     }
 
+    // Per-entity skills allowlist: when set and non-empty, only expose those tools.
+    if let (Some(ref pool), Some(eid)) = (entity_pool, target_entity_id) {
+        if let Some(entity) = pool.get(eid) {
+            if !entity.skills_allowlist.is_empty() {
+                let allow: std::collections::HashSet<&str> =
+                    entity.skills_allowlist.iter().map(String::as_str).collect();
+                tool_arcs.retain(|t| allow.contains(t.name()));
+            }
+        }
+    }
+
     boxed_registry_from_arcs(tool_arcs)
 }
 

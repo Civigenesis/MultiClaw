@@ -1,17 +1,82 @@
 //! Instance manager: CRUD and port allocation for cluster instances.
 //!
 //! Used by admin to create/list/delete instances. Port pool starts at 42618
-//! (admin uses 42617).
+//! (admin uses 42617). Also provides ensure_admin_instance for first-time cluster setup.
 
-use crate::instance_registry::{
-    InstanceEntry, InstanceRegistry, InstanceRole, InstanceStatus,
-};
+use crate::instance_registry::{InstanceEntry, InstanceRegistry, InstanceRole, InstanceStatus};
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 const PORT_POOL_START: u16 = 42618;
 const INSTANCES_DIR: &str = "instances";
+
+/// Admin instance id (董事长). Reserved; cannot be used for instance_create.
+pub const ADMIN_INSTANCE_ID: &str = "admin";
+/// Gateway port for the admin instance.
+pub const ADMIN_GATEWAY_PORT: u16 = 42617;
+
+/// Minimal config.toml for the admin instance (no api_key; pairing optional).
+const MINIMAL_ADMIN_CONFIG: &str = r#"default_temperature = 0.7
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+require_pairing = false
+
+[secrets]
+encrypt = false
+
+[channels_config]
+cli = true
+"#;
+
+/// Ensure cluster has an admin instance: create instances/admin and register if missing.
+/// Scaffolds admin (董事长) workspace with IDENTITY.md, SOUL.md, AGENTS.md.
+/// Returns (workspace_dir, config_path) for the admin instance.
+pub async fn ensure_admin_instance(cluster_root: &Path) -> Result<(PathBuf, PathBuf)> {
+    let mut reg = InstanceRegistry::load(cluster_root).await?;
+    if reg.get(ADMIN_INSTANCE_ID).is_some() {
+        let admin_dir = cluster_root.join(INSTANCES_DIR).join(ADMIN_INSTANCE_ID);
+        return Ok((admin_dir.join("workspace"), admin_dir.join("config.toml")));
+    }
+
+    let admin_dir = cluster_root.join(INSTANCES_DIR).join(ADMIN_INSTANCE_ID);
+    fs::create_dir_all(admin_dir.join("workspace"))
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to create admin instance dir: {}",
+                admin_dir.display()
+            )
+        })?;
+
+    let config_path = admin_dir.join("config.toml");
+    fs::write(&config_path, MINIMAL_ADMIN_CONFIG)
+        .await
+        .with_context(|| format!("Failed to write admin config: {}", config_path.display()))?;
+
+    let created_at = chrono::Utc::now().to_rfc3339();
+    reg.add(InstanceEntry {
+        id: ADMIN_INSTANCE_ID.to_string(),
+        role: InstanceRole::Admin,
+        status: InstanceStatus::Created,
+        config_path: Some(config_path.to_string_lossy().into_owned()),
+        workspace_path: Some(admin_dir.join("workspace").to_string_lossy().into_owned()),
+        gateway_port: Some(ADMIN_GATEWAY_PORT),
+        created_at: Some(created_at),
+        constraints: None,
+        preset: None,
+    });
+    reg.save(cluster_root).await?;
+
+    let admin_workspace = admin_dir.join("workspace");
+    crate::entity::scaffold_admin_workspace(&admin_workspace)
+        .await
+        .with_context(|| "Failed to scaffold admin (董事长) workspace")?;
+
+    Ok((admin_workspace, config_path))
+}
 
 /// Minimal config.toml for a new normal instance (port is injected).
 /// When preset is startup or enterprise, appends [instance] and [instance.ceo] so CEO is enabled.
@@ -51,7 +116,9 @@ preset = "{preset_val}"
 /// Allocate the next available port >= PORT_POOL_START from the registry.
 fn allocate_port(reg: &InstanceRegistry) -> u16 {
     let used: std::collections::HashSet<u16> = reg.allocated_ports().collect();
-    (PORT_POOL_START..=65535).find(|p| !used.contains(p)).unwrap_or(42618)
+    (PORT_POOL_START..=65535)
+        .find(|p| !used.contains(p))
+        .unwrap_or(42618)
 }
 
 /// Create a new instance: directories, minimal config, registry entry.
@@ -62,8 +129,8 @@ pub async fn instance_create(
     role: InstanceRole,
     preset: Option<&str>,
 ) -> Result<InstanceEntry> {
-    if id == "admin" {
-        bail!("Instance id 'admin' is reserved");
+    if id == ADMIN_INSTANCE_ID {
+        bail!("Instance id '{}' is reserved", ADMIN_INSTANCE_ID);
     }
     let id_clean = id.trim();
     if id_clean.is_empty() {
@@ -93,7 +160,12 @@ pub async fn instance_create(
 
     crate::entity::scaffold_instance_workspace(&workspace_dir, id_clean)
         .await
-        .with_context(|| format!("Failed to scaffold instance workspace: {}", workspace_dir.display()))?;
+        .with_context(|| {
+            format!(
+                "Failed to scaffold instance workspace: {}",
+                workspace_dir.display()
+            )
+        })?;
 
     // When preset implies CEO (startup/enterprise), scaffold workspace/entities/ceo/ with detailed IDENTITY.md and AGENTS.md.
     let scaffold_ceo = preset
@@ -126,8 +198,8 @@ pub async fn instance_create(
 /// Soft-delete an instance: set status to Deleted. Does not remove directories.
 /// Fails if id is "admin" or instance does not exist.
 pub async fn instance_delete(cluster_root: &Path, id: &str) -> Result<()> {
-    if id == "admin" {
-        bail!("Cannot delete reserved instance 'admin'");
+    if id == ADMIN_INSTANCE_ID {
+        bail!("Cannot delete reserved instance '{}'", ADMIN_INSTANCE_ID);
     }
     let mut reg = InstanceRegistry::load(cluster_root).await?;
     if !reg.update_status(id, InstanceStatus::Deleted) {
@@ -146,13 +218,17 @@ pub async fn instance_list(cluster_root: &Path) -> Result<Vec<InstanceEntry>> {
 /// Return the entry for an instance if it exists and is not deleted.
 pub async fn instance_status(cluster_root: &Path, id: &str) -> Result<Option<InstanceEntry>> {
     let reg = InstanceRegistry::load(cluster_root).await?;
-    Ok(reg.get(id).filter(|e| e.status != InstanceStatus::Deleted).cloned())
+    Ok(reg
+        .get(id)
+        .filter(|e| e.status != InstanceStatus::Deleted)
+        .cloned())
 }
 
 /// Returns true if the current config path is the admin instance (for permission check).
 pub fn is_admin_instance(config_path: &Path) -> bool {
     let path_str = config_path.to_string_lossy();
-    path_str.contains("instances") && path_str.contains("admin")
+    path_str.contains("instances")
+        && path_str.contains(ADMIN_INSTANCE_ID)
         && path_str.ends_with("config.toml")
 }
 
@@ -173,8 +249,16 @@ mod tests {
             .unwrap();
         assert_eq!(entry.id, "worker1");
         assert!(entry.gateway_port.unwrap() >= 42618);
-        assert!(dir.join("instances").join("worker1").join("config.toml").exists());
-        assert!(dir.join("instances").join("worker1").join("workspace").exists());
+        assert!(dir
+            .join("instances")
+            .join("worker1")
+            .join("config.toml")
+            .exists());
+        assert!(dir
+            .join("instances")
+            .join("worker1")
+            .join("workspace")
+            .exists());
 
         let list = instance_list(&dir).await.unwrap();
         assert_eq!(list.len(), 1);
@@ -189,7 +273,9 @@ mod tests {
         let _ = fs::remove_dir_all(&dir).await;
         fs::create_dir_all(&dir).await.unwrap();
 
-        instance_create(&dir, "x", InstanceRole::Normal, None).await.unwrap();
+        instance_create(&dir, "x", InstanceRole::Normal, None)
+            .await
+            .unwrap();
         instance_delete(&dir, "x").await.unwrap();
         let list = instance_list(&dir).await.unwrap();
         assert_eq!(list.len(), 1);
@@ -205,8 +291,12 @@ mod tests {
         fs::create_dir_all(&dir).await.unwrap();
 
         assert!(instance_list(&dir).await.unwrap().is_empty());
-        instance_create(&dir, "a", InstanceRole::Normal, None).await.unwrap();
-        instance_create(&dir, "b", InstanceRole::Normal, Some("default")).await.unwrap();
+        instance_create(&dir, "a", InstanceRole::Normal, None)
+            .await
+            .unwrap();
+        instance_create(&dir, "b", InstanceRole::Normal, Some("default"))
+            .await
+            .unwrap();
         let list = instance_list(&dir).await.unwrap();
         assert_eq!(list.len(), 2);
         let ids: Vec<&str> = list.iter().map(|e| e.id.as_str()).collect();

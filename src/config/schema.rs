@@ -3804,8 +3804,7 @@ pub fn cluster_root() -> Result<PathBuf> {
 
 /// True when running in cluster layout: `instances.json` exists or `instances/` is a directory.
 pub fn is_cluster_mode(cluster_root: &Path) -> bool {
-    cluster_root.join("instances.json").exists()
-        || cluster_root.join("instances").is_dir()
+    cluster_root.join("instances.json").exists() || cluster_root.join("instances").is_dir()
 }
 
 fn active_workspace_state_path(default_dir: &Path) -> PathBuf {
@@ -4164,28 +4163,69 @@ fn read_codex_openai_api_key() -> Option<String> {
 impl Config {
     /// Load or initialize config. In cluster mode, when `instance_id_override` or
     /// `MULTICLAW_INSTANCE` is set, uses `cluster_root/instances/<id>/config.toml` and
-    /// `cluster_root/instances/<id>/workspace`. Otherwise uses existing single-instance resolution.
+    /// `cluster_root/instances/<id>/workspace`. When in cluster mode but no instance specified,
+    /// defaults to **admin** (董事长). On first init (no config and no cluster yet), creates
+    /// cluster + admin instance and loads admin so the first global instance is admin.
     pub async fn load_or_init(instance_id_override: Option<&str>) -> Result<Self> {
-        let instance_id: Option<String> = instance_id_override
-            .map(String::from)
-            .or_else(|| {
-                std::env::var("MULTICLAW_INSTANCE")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            });
+        let instance_id: Option<String> = instance_id_override.map(String::from).or_else(|| {
+            std::env::var("MULTICLAW_INSTANCE")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
         let root = cluster_root()?;
+        let in_cluster_mode = is_cluster_mode(&root);
 
-        let (multiclaw_dir, workspace_dir, resolution_source) =
-            if is_cluster_mode(&root) && instance_id.is_some() {
-                let id = instance_id.as_deref().unwrap();
-                let multiclaw_dir = root.join("instances").join(id);
-                let workspace_dir = multiclaw_dir.join("workspace");
-                (multiclaw_dir, workspace_dir, ConfigResolutionSource::DefaultConfigDir)
+        // Default to admin when in cluster mode but no instance specified (董事长 as default conversation target).
+        let effective_instance_id: Option<String> = if in_cluster_mode && instance_id.is_none() {
+            Some(multiclaw::instance_manager::ADMIN_INSTANCE_ID.to_string())
+        } else {
+            instance_id
+        };
+
+        let (multiclaw_dir, workspace_dir, resolution_source) = if in_cluster_mode
+            && effective_instance_id.is_some()
+        {
+            let id = effective_instance_id.as_deref().unwrap();
+            let multiclaw_dir = root.join("instances").join(id);
+            let workspace_dir = multiclaw_dir.join("workspace");
+            (
+                multiclaw_dir,
+                workspace_dir,
+                ConfigResolutionSource::DefaultConfigDir,
+            )
+        } else {
+            let (default_multiclaw_dir, default_workspace_dir) =
+                default_config_and_workspace_dirs()?;
+            let (resolved_multiclaw_dir, resolved_workspace_dir, resolved_source) =
+                resolve_runtime_config_dirs(&default_multiclaw_dir, &default_workspace_dir).await?;
+
+            // First init on machine (no cluster yet and no config) -> create cluster + admin and use admin.
+            //
+            // IMPORTANT: Do not override explicit env / marker workspace selection.
+            // Only auto-create admin when we're using the default config dir resolution.
+            let should_auto_create_admin = !in_cluster_mode
+                && resolved_source == ConfigResolutionSource::DefaultConfigDir
+                && !resolved_multiclaw_dir.join("config.toml").exists();
+
+            if should_auto_create_admin {
+                multiclaw::instance_manager::ensure_admin_instance(&root).await?;
+                let admin_dir = root
+                    .join("instances")
+                    .join(multiclaw::instance_manager::ADMIN_INSTANCE_ID);
+                let workspace_dir = admin_dir.join("workspace");
+                (
+                    admin_dir,
+                    workspace_dir,
+                    ConfigResolutionSource::DefaultConfigDir,
+                )
             } else {
-                let (default_multiclaw_dir, default_workspace_dir) =
-                    default_config_and_workspace_dirs()?;
-                resolve_runtime_config_dirs(&default_multiclaw_dir, &default_workspace_dir).await?
-            };
+                (
+                    resolved_multiclaw_dir,
+                    resolved_workspace_dir,
+                    resolved_source,
+                )
+            }
+        };
 
         let config_path = multiclaw_dir.join("config.toml");
 
@@ -5138,7 +5178,10 @@ id = "docs"
 name = "Docs"
 "#;
         let config: Config = toml::from_str(toml).expect("instance section should deserialize");
-        let inst = config.instance.as_ref().expect("instance should be present");
+        let inst = config
+            .instance
+            .as_ref()
+            .expect("instance should be present");
         assert_eq!(inst.preset.as_deref(), Some("enterprise"));
         assert_eq!(inst.default_provider.as_deref(), Some("openai"));
         assert_eq!(inst.default_model.as_deref(), Some("gpt-4"));
@@ -7031,7 +7074,11 @@ requires_openai_auth = true
     async fn is_cluster_mode_true_with_instances_json() {
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("instances.json"), "{\"version\":1,\"instances\":[]}").unwrap();
+        std::fs::write(
+            dir.join("instances.json"),
+            "{\"version\":1,\"instances\":[]}",
+        )
+        .unwrap();
         assert!(is_cluster_mode(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }

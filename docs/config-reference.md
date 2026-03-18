@@ -22,9 +22,31 @@ Schema export command:
 
 | Key | Default | Notes |
 |---|---|---|
-| `default_provider` | `openrouter` | provider ID or alias |
-| `default_model` | `anthropic/claude-sonnet-4-6` | model routed through selected provider |
+| `default_provider` | `openrouter` | provider ID or alias (see also `[instance]` below) |
+| `default_model` | `anthropic/claude-sonnet-4-6` | model routed through selected provider (see also `[instance]` below) |
 | `default_temperature` | `0.7` | model temperature |
+
+**Provider/model resolution order** (when running with multi-entity or `--entity`): CLI/entity override → `[instance].default_provider` / `[instance].default_model` → top-level `default_provider` / `default_model`. If none is set, the runtime fails with an explicit error (no silent fallback).
+
+## `[instance]` (single-instance multi-entity)
+
+Used when one instance runs multiple entities (e.g. CEO + workers). In cluster mode each instance has its own `config.toml` under `instances/<id>/`; `[instance]` lives in that file.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `preset` | (none) | Organization preset: `startup`, `enterprise`, `brainstorm`, `freeform`, `project` |
+| `default_provider` | (none) | Instance-level default provider; overrides top-level when set |
+| `default_model` | (none) | Instance-level default model; overrides top-level when set |
+| `[instance.ceo]` | (none) | When present, enables the CEO entity (`entity_id=ceo`) for management tools |
+| `[[instance.entities]]` | `[]` | Per-entity config: `id`, optional `provider`, `model`, `team_id`, `role`, `skills` |
+| `[instance.teams]` | `[]` | Team definitions (e.g. for enterprise preset) |
+| `[instance.projects]` | `[]` | Project definitions (for project preset) |
+
+Notes:
+
+- With `[instance]` and `[instance.ceo]`, run as CEO via `--entity ceo` or cron `target = "ceo"` to use `instance_status`, `create_team`, `create_entity`, `assign_task`.
+- Entity-level `provider` / `model` override the instance default for that entity when `--entity <id>` is used.
+- If neither top-level nor `[instance]` sets `default_provider` / `default_model`, the agent run fails with a clear error.
 
 ## `[observability]`
 

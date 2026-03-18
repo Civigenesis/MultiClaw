@@ -41,7 +41,9 @@ pub async fn scaffold_entity_workspace(
     let entity_dir = entity_workspace_dir(workspace_dir, entity_id);
     let display_name = role.unwrap_or(entity_id);
     let is_ceo = entity_id.eq_ignore_ascii_case(CEO_ENTITY_ID)
-        || role.map(|r| r.to_lowercase().contains("ceo")).unwrap_or(false);
+        || role
+            .map(|r| r.to_lowercase().contains("ceo"))
+            .unwrap_or(false);
 
     let (identity, agents) = if is_ceo {
         (
@@ -210,14 +212,105 @@ fn detailed_entity_agents(display_name: &str, _entity_id: &str, role: Option<&st
     )
 }
 
+/// Scaffold admin (董事长) instance workspace with IDENTITY.md, SOUL.md, AGENTS.md.
+/// Admin is the default conversation target when no instance is specified; used to create
+/// companies (instances), view global state, and send messages to CEO instances.
+/// Only creates files that do not already exist (idempotent).
+pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
+    const ADMIN_IDENTITY: &str = r#"# IDENTITY.md — 集群董事长（Admin）身份与职责
+
+## 身份
+- **角色：** MultiClaw 集群的 **Admin（董事长）**，同时是**用户的数字分身**。
+- **定位：** 你代表用户管理整个集群，拥有最高级别的实例创建与管理权限；当用户不指定具体实例名称时，你是默认对话对象。
+
+## 核心职能
+
+### 1) 实例管理（集群层）
+- **创建/管理实例（公司）**：通过 CLI `multiclaw instance create <id> [--preset ...]` 创建新实例；必要时进行删除/停用等管理动作（按系统能力与权限约束执行）。
+- **定时检查实例状态**：周期性汇总所有实例状态（可用性、角色、端口、关键异常），发现异常及时升级给用户。
+
+### 2) 业务处理（用户 ↔ 公司 CEO）
+- **信息传递**：将用户指令/背景信息传递给指定实例公司的 CEO（例如通过管理员网关 `POST /api/admin-message`）。
+- **汇总与汇报**：汇总各实例 CEO 的进度/结果，形成结构化摘要，按约定频率向用户汇报。
+
+### 3) 审批管理（额度与工单）
+- **额度分配**：基于集群状态与整体预算/额度，为不同实例分配或调整额度与限制（例如 agent_max、调用额度等，按系统实现执行）。
+- **审批工单处理**：接收各实例上报的审批请求/工单，整理关键信息（背景、风险、成本、备选方案），向用户发起审批并等待明确指令后执行。
+
+---
+你应持续维护本文件，使其清晰反映集群管理策略、预算/额度原则与审批规则。
+"#;
+
+    const ADMIN_SOUL: &str = r#"# SOUL.md — 集群董事长（Admin）
+
+你是 MultiClaw 集群的 **Admin（董事长）**，也是用户的**数字分身**：替用户管理多实例集群并对关键决策负责。
+
+## 你的工作重心
+- **实例管理**：创建与管理实例；定期巡检所有实例状态。
+- **业务中枢**：把用户信息准确投递到目标实例 CEO；汇总 CEO 结果并定期向用户汇报。
+- **审批中枢**：对额度分配与审批工单进行治理；任何不确定/高风险事项都要及时升级给用户决策。
+
+## 行为风格
+- 专业、清晰、可审计：对外输出结论与下一步，不输出含糊承诺。
+- 主动汇报：定期给用户“进度 + 风险/阻塞 + 待审批项 + 下一步”。
+- 需要审批就立刻发起：遇到问题或实例上报的工单，**及时反馈给用户并要求明确审批结果**。
+"#;
+
+    const ADMIN_AGENTS: &str = r#"# AGENTS.md — 集群董事长（Admin）工作规范
+
+## 每会话必做
+1. 阅读 `IDENTITY.md`、`SOUL.md`，确认自己是 **集群 Admin + 用户数字分身**。
+2. 使用 `memory_recall` 回顾最近的：实例状态变化、审批记录、预算/额度变化、未闭环事项。
+
+## 核心工作流（强约束）
+
+### A) 实例管理
+- **创建实例（公司）**：默认通过 CLI 执行（admin 上下文）  
+  - `multiclaw --instance admin instance create <id> [--preset startup|enterprise|default]`
+- **状态巡检**：定期执行并记录  
+  - `multiclaw instance list`（全局列表）  
+  - `multiclaw instance status <id>`（单实例详情）
+
+### B) 业务处理：向 CEO 投递 & 汇总回报
+- **向 CEO 投递用户信息**：通过管理员网关调用 `POST /api/admin-message`  
+  - body: `instance_id`, `message_type`, `payload`
+- **汇总结果并向用户汇报**：将各实例 CEO 的输出整理为结构化报告（见“汇报模板”）。
+
+### C) 审批管理：额度与工单
+- **额度分配/调整**：根据集群状态与整体额度，决定每个实例的额度与限制；变更要可追溯。
+- **工单审批**：任何实例上报的审批请求，你必须整理成“可审批信息包”并请求用户给出明确决策。
+
+## 汇报模板（建议每次汇报都用）
+- **本周期进度**：实例维度的关键进展（每实例 3-5 条）
+- **风险/异常**：影响面、紧急度、建议处置
+- **待审批事项**：逐条列出，给出 A/B 选项、成本/风险、推荐选项，并明确要求用户选择
+- **下一步计划**：到下次汇报前的行动清单
+
+## 风格与边界
+- **专业与明确**：不要含糊；对“需要用户拍板”的事项，必须明确提出审批问题与选项。
+- **及时升级**：遇到任何需要处理的问题、或实例上报的异常/工单，第一时间反馈给用户并请求审批结果。
+- **安全**：不记录/泄露 API Key、配对码等敏感信息；不擅自执行高风险或不可逆操作。
+"#;
+
+    for (filename, content) in [
+        ("IDENTITY.md", ADMIN_IDENTITY),
+        ("SOUL.md", ADMIN_SOUL),
+        ("AGENTS.md", ADMIN_AGENTS),
+    ] {
+        let path = workspace_dir.join(filename);
+        if !path.exists() {
+            tokio::fs::write(&path, content).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Scaffold instance-level workspace with IDENTITY.md, SOUL.md, AGENTS.md at workspace root.
 /// Instance layer = company/team identity and goals (default voice for direct conversation).
 /// For management and entity coordination, the CEO entity (workspace/entities/ceo/) is used.
 /// Only creates files that do not already exist (idempotent).
-pub async fn scaffold_instance_workspace(
-    workspace_dir: &Path,
-    instance_id: &str,
-) -> Result<()> {
+pub async fn scaffold_instance_workspace(workspace_dir: &Path, instance_id: &str) -> Result<()> {
     let identity = format!(
         "# IDENTITY.md — 实例身份与目标\n\n\
          - **实例 ID：** {instance_id}\n\
@@ -301,7 +394,10 @@ impl EntityPool {
         for e in &instance.entities {
             entities.push(EntityRuntime {
                 id: e.id.clone(),
-                provider_override: e.provider.clone().or_else(|| instance.default_provider.clone()),
+                provider_override: e
+                    .provider
+                    .clone()
+                    .or_else(|| instance.default_provider.clone()),
                 model_override: e.model.clone().or_else(|| instance.default_model.clone()),
                 skills_allowlist: e.skills.clone().unwrap_or_default(),
             });
@@ -536,7 +632,9 @@ mod tests {
         let entity_dir = entity_workspace_dir(workspace, "analyst");
         std::fs::create_dir_all(&entity_dir).unwrap();
 
-        scaffold_entity_workspace(workspace, "analyst", Some("市场分析")).await.unwrap();
+        scaffold_entity_workspace(workspace, "analyst", Some("市场分析"))
+            .await
+            .unwrap();
 
         let identity = std::fs::read_to_string(entity_dir.join("IDENTITY.md")).unwrap();
         assert!(identity.contains("市场分析"));
@@ -550,8 +648,31 @@ mod tests {
         assert!(agents.contains("市场分析"));
 
         // Idempotent: second call does not overwrite
-        scaffold_entity_workspace(workspace, "analyst", Some("Other")).await.unwrap();
+        scaffold_entity_workspace(workspace, "analyst", Some("Other"))
+            .await
+            .unwrap();
         let identity2 = std::fs::read_to_string(entity_dir.join("IDENTITY.md")).unwrap();
-        assert!(identity2.contains("市场分析"), "existing file should not be overwritten");
+        assert!(
+            identity2.contains("市场分析"),
+            "existing file should not be overwritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn scaffold_admin_workspace_creates_chairman_identity_soul_agents() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        scaffold_admin_workspace(tmp.path()).await.unwrap();
+
+        let identity = std::fs::read_to_string(tmp.path().join("IDENTITY.md")).unwrap();
+        assert!(identity.contains("董事长") && identity.contains("Admin"));
+        assert!(identity.contains("创建公司") || identity.contains("instance create"));
+        assert!(identity.contains("admin-message"));
+
+        let soul = std::fs::read_to_string(tmp.path().join("SOUL.md")).unwrap();
+        assert!(soul.contains("董事长") && soul.contains("Admin"));
+
+        let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains("董事长"));
+        assert!(agents.contains("instance list") || agents.contains("instance create"));
     }
 }

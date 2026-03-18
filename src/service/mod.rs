@@ -184,8 +184,11 @@ fn stop(config: &Config, init_system: InitSystem) -> Result<()> {
 fn stop_linux(init_system: InitSystem) -> Result<()> {
     match init_system {
         InitSystem::Systemd => {
-            let _ =
-                run_checked(Command::new("systemctl").args(["--user", "stop", "multiclaw.service"]));
+            let _ = run_checked(Command::new("systemctl").args([
+                "--user",
+                "stop",
+                "multiclaw.service",
+            ]));
         }
         InitSystem::Openrc => {
             let _ = run_checked(Command::new("rc-service").args(["multiclaw", "stop"]));
@@ -223,7 +226,11 @@ fn restart_linux(init_system: InitSystem) -> Result<()> {
     match init_system {
         InitSystem::Systemd => {
             run_checked(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-            run_checked(Command::new("systemctl").args(["--user", "restart", "multiclaw.service"]))?;
+            run_checked(Command::new("systemctl").args([
+                "--user",
+                "restart",
+                "multiclaw.service",
+            ]))?;
         }
         InitSystem::Openrc => {
             run_checked(Command::new("rc-service").args(["multiclaw", "restart"]))?;
@@ -442,7 +449,11 @@ fn install_macos(config: &Config, instance_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn install_linux(config: &Config, init_system: InitSystem, instance_id: Option<&str>) -> Result<()> {
+fn install_linux(
+    config: &Config,
+    init_system: InitSystem,
+    instance_id: Option<&str>,
+) -> Result<()> {
     match init_system {
         InitSystem::Systemd => install_linux_systemd(config, instance_id),
         InitSystem::Openrc => install_linux_openrc(config, instance_id),
@@ -489,7 +500,9 @@ fn is_root() -> bool {
 /// Returns Ok if user doesn't exist (OpenRC will handle creation or fail gracefully).
 /// Returns error if user exists but has unexpected properties.
 fn check_multiclaw_user() -> Result<()> {
-    let output = Command::new("getent").args(["passwd", "multiclaw"]).output();
+    let output = Command::new("getent")
+        .args(["passwd", "multiclaw"])
+        .output();
     let is_alpine = Path::new("/etc/alpine-release").exists();
 
     let (del_cmd, add_cmd) = if is_alpine {
@@ -545,7 +558,9 @@ fn check_multiclaw_user() -> Result<()> {
 }
 
 fn ensure_multiclaw_user() -> Result<()> {
-    let output = Command::new("getent").args(["passwd", "multiclaw"]).output();
+    let output = Command::new("getent")
+        .args(["passwd", "multiclaw"])
+        .output();
     if let Ok(output) = output {
         if output.status.success() {
             return check_multiclaw_user();
@@ -839,11 +854,7 @@ fn warn_if_binary_in_home(exe_path: &Path) {
 }
 
 /// Generate OpenRC init script content (pure function for testability)
-fn generate_openrc_script(
-    exe_path: &Path,
-    config_dir: &Path,
-    instance_id: Option<&str>,
-) -> String {
+fn generate_openrc_script(exe_path: &Path, config_dir: &Path, instance_id: Option<&str>) -> String {
     let instance_arg = instance_id
         .map(|id| format!(" --instance {id}"))
         .unwrap_or_default();

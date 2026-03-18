@@ -2743,11 +2743,24 @@ pub async fn run(
         &config.workspace_dir,
     ));
 
-    // ── Memory (the brain) ────────────────────────────────────────
+    // ── Multi-entity: pool and effective workspace (memory/skills/prompt root) ─
+    let entity_pool = crate::entity::EntityPool::from_config(&config);
+    let effective_workspace: std::path::PathBuf = if let Some(ref eid) = target_entity_id {
+        let entity_dir = crate::entity::entity_workspace_dir(&config.workspace_dir, eid);
+        if entity_dir.exists() {
+            entity_dir
+        } else {
+            config.workspace_dir.clone()
+        }
+    } else {
+        config.workspace_dir.clone()
+    };
+
+    // ── Memory (the brain): per-entity root when target_entity_id set ─
     let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
         &config.memory,
         Some(&config.storage.provider.config),
-        &config.workspace_dir,
+        &effective_workspace,
         config.api_key.as_deref(),
     )?);
     tracing::info!(backend = mem.name(), "Memory initialized");
@@ -2760,13 +2773,14 @@ pub async fn run(
         );
     }
 
-    // ── Multi-entity: pool and effective provider/model overrides ─
-    let entity_pool = crate::entity::EntityPool::from_config(&config);
     let (effective_provider_override, effective_model_override) =
         if let (Some(ref pool), Some(ref eid)) = (&entity_pool, &target_entity_id) {
             if let Some(entity) = pool.get(eid) {
                 (
-                    entity.provider_override.clone().or(provider_override.clone()),
+                    entity
+                        .provider_override
+                        .clone()
+                        .or(provider_override.clone()),
                     entity.model_override.clone().or(model_override.clone()),
                 )
             } else {
@@ -2775,6 +2789,33 @@ pub async fn run(
         } else {
             (provider_override.clone(), model_override.clone())
         };
+
+    // ── agent_max from instance registry (cluster mode) ─
+    let agent_max: Option<u32> = {
+        let path = config.config_path.as_path();
+        let instance_dir = path.parent(); // .../instances/<id>
+        let instances_dir = instance_dir.and_then(std::path::Path::parent); // .../instances
+        let cluster_root = instances_dir.and_then(std::path::Path::parent);
+        let instance_id = instance_dir.and_then(|p| p.file_name().and_then(|n| n.to_str()));
+        let mut out = None;
+        if instances_dir
+            .and_then(|d| d.file_name().and_then(|n| n.to_str()))
+            .as_deref()
+            == Some("instances")
+            && instance_id.is_some()
+        {
+            if let Some(root) = cluster_root {
+                if crate::config::schema::is_cluster_mode(root) {
+                    if let Ok(reg) = crate::instance_registry::InstanceRegistry::load(root).await {
+                        if let Some(entry) = reg.get(instance_id.unwrap()) {
+                            out = entry.constraints.as_ref().and_then(|c| c.agent_max);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
 
     // ── Tools (including memory tools and peripherals) ────────────
     let (composio_key, composio_entity_id) = if config.composio.enabled {
@@ -2801,7 +2842,7 @@ pub async fn run(
         &config,
         target_entity_id.as_deref(),
         entity_pool.clone(),
-        None, // agent_max from instance constraints when available
+        agent_max,
     );
 
     let peripheral_tools: Vec<Box<dyn Tool>> =
@@ -2881,21 +2922,11 @@ pub async fn run(
         .map(|b| b.board.clone())
         .collect();
 
-    // ── Prompt workspace: entity-specific when target_entity_id set (for independent persona) ──
-    let effective_prompt_workspace: std::path::PathBuf =
-        if let Some(ref eid) = target_entity_id {
-            let entity_dir = crate::entity::entity_workspace_dir(&config.workspace_dir, eid);
-            if entity_dir.exists() {
-                entity_dir
-            } else {
-                config.workspace_dir.clone()
-            }
-        } else {
-            config.workspace_dir.clone()
-        };
+    // ── Prompt workspace: same as effective_workspace (entity or instance root) ──
+    let effective_prompt_workspace = effective_workspace.clone();
 
-    // ── Build system prompt from workspace MD files (OpenClaw framework) ──
-    let skills = crate::skills::load_skills_with_config(&config.workspace_dir, &config);
+    // ── Build system prompt from workspace MD files (OpenClaw framework); skills from effective workspace ──
+    let skills = crate::skills::load_skills_with_config(&effective_workspace, &config);
     let mut tool_descs: Vec<(&str, &str)> = vec![
         (
             "shell",
@@ -3311,7 +3342,10 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         .instance
         .as_ref()
         .and_then(|i| i.default_provider.as_deref());
-    let instance_model = config.instance.as_ref().and_then(|i| i.default_model.clone());
+    let instance_model = config
+        .instance
+        .as_ref()
+        .and_then(|i| i.default_model.clone());
     let provider_name = instance_provider
         .or(config.default_provider.as_deref())
         .ok_or_else(|| {

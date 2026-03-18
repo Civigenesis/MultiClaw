@@ -8,7 +8,6 @@ use crate::config::{
     RuntimeConfig, SecretsConfig, SlackConfig, StorageConfig, TelegramConfig, WebhookConfig,
 };
 use crate::hardware::{self, HardwareConfig};
-use crate::instance_registry::{InstanceEntry, InstanceRegistry, InstanceRole, InstanceStatus};
 use crate::memory::{
     default_memory_backend_key, memory_backend_profile, selectable_memory_backends,
 };
@@ -20,6 +19,7 @@ use crate::providers::{
 use anyhow::{bail, Context, Result};
 use console::style;
 use dialoguer::{Confirm, Input, Select};
+use multiclaw::instance_manager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -120,6 +120,8 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
     let project_ctx = setup_project_context()?;
 
     print_step(9, 9, "Workspace Files");
+    // Safe for admin too: scaffold_workspace is idempotent and will not overwrite existing files
+    // (so 董事长 persona remains intact), but will create standard dirs/files.
     scaffold_workspace(&workspace_dir, &project_ctx).await?;
 
     // ── Build config ──
@@ -457,10 +459,51 @@ async fn run_quick_setup_with_home(
     );
     println!();
 
-    let (multiclaw_dir, workspace_dir) = resolve_quick_setup_dirs_with_home(home);
-    let config_path = multiclaw_dir.join("config.toml");
+    // In first-time initialization on a machine (no cluster yet, no config yet),
+    // default to cluster mode and create the admin (董事长) instance so the default
+    // conversation target is admin.
+    //
+    // IMPORTANT: Do not override explicit workspace/config overrides.
+    let has_config_dir_override = std::env::var("MULTICLAW_CONFIG_DIR")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    let has_workspace_override = std::env::var("MULTICLAW_WORKSPACE")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
 
-    ensure_onboard_overwrite_allowed(&config_path, force)?;
+    let default_root = if let Ok(v) = std::env::var("MULTICLAW_CLUSTER_ROOT") {
+        let v = v.trim();
+        if !v.is_empty() {
+            PathBuf::from(v)
+        } else {
+            home.join(".multiclaw")
+        }
+    } else {
+        home.join(".multiclaw")
+    };
+
+    let (multiclaw_dir, workspace_dir, config_path, admin_bootstrapped) =
+        if !has_config_dir_override
+            && !has_workspace_override
+            && !crate::config::schema::is_cluster_mode(&default_root)
+            && !default_root.join("config.toml").exists()
+        {
+            let (admin_workspace_dir, admin_config_path) =
+                instance_manager::ensure_admin_instance(&default_root).await?;
+            let admin_dir = admin_config_path
+                .parent()
+                .context("admin config path has no parent")?
+                .to_path_buf();
+            (admin_dir, admin_workspace_dir, admin_config_path, true)
+        } else {
+            let (multiclaw_dir, workspace_dir) = resolve_quick_setup_dirs_with_home(home);
+            let config_path = multiclaw_dir.join("config.toml");
+            (multiclaw_dir, workspace_dir, config_path, false)
+        };
+
+    // If we just bootstrapped admin, we intentionally overwrite the minimal admin config
+    // with the full config produced by quick setup.
+    ensure_onboard_overwrite_allowed(&config_path, force || admin_bootstrapped)?;
     fs::create_dir_all(&workspace_dir)
         .await
         .context("Failed to create workspace directory")?;
@@ -476,7 +519,7 @@ async fn run_quick_setup_with_home(
     // Create memory config based on backend choice
     let memory_config = memory_config_defaults_for_backend(&memory_backend_name);
 
-    let config = Config {
+    let mut config = Config {
         workspace_dir: workspace_dir.clone(),
         config_path: config_path.clone(),
         api_key: credential_override.map(|c| {
@@ -525,10 +568,21 @@ async fn run_quick_setup_with_home(
         instance: None,
     };
 
+    // If quick setup targeted the admin instance (董事长), keep admin-specific gateway defaults.
+    let ws_str = workspace_dir.to_string_lossy();
+    if ws_str.contains("instances") && ws_str.contains(instance_manager::ADMIN_INSTANCE_ID) {
+        config.gateway.port = instance_manager::ADMIN_GATEWAY_PORT;
+        config.gateway.require_pairing = false;
+        // Admin bootstrap config is intentionally minimal and local-first.
+        config.secrets.encrypt = false;
+        config.channels_config.cli = true;
+    }
+
     config.save().await?;
     persist_workspace_selection(&config.config_path).await?;
 
-    // Scaffold minimal workspace files
+    // Scaffold minimal workspace files. Safe for admin too: scaffold_workspace is idempotent
+    // and will not overwrite existing files (so 董事长 persona remains intact).
     let default_ctx = ProjectContext {
         user_name: std::env::var("USER").unwrap_or_else(|_| "User".into()),
         timezone: "UTC".into(),
@@ -581,12 +635,27 @@ async fn run_quick_setup_with_home(
     println!(
         "  {} Secrets:    {}",
         style("✓").green().bold(),
-        style("encrypted").green()
+        style(if config.secrets.encrypt {
+            "encrypted"
+        } else {
+            "plain"
+        })
+        .green()
     );
     println!(
         "  {} Gateway:    {}",
         style("✓").green().bold(),
-        style("pairing required (127.0.0.1:8080)").green()
+        style(format!(
+            "{} ({}:{})",
+            if config.gateway.require_pairing {
+                "pairing required"
+            } else {
+                "pairing disabled"
+            },
+            config.gateway.host,
+            config.gateway.port
+        ))
+        .green()
     );
     println!(
         "  {} Tunnel:     {}",
@@ -2070,60 +2139,10 @@ async fn persist_workspace_selection(config_path: &Path) -> Result<()> {
 
 // ── Step 1: Workspace ────────────────────────────────────────────
 
-const ADMIN_INSTANCE_ID: &str = "admin";
-const ADMIN_GATEWAY_PORT: u16 = 42617;
-
-/// Minimal config.toml for a new admin instance.
-/// require_pairing=false and secrets.encrypt=false avoid pairing-code loss and
-/// allow config copy between instances (e.g. admin → worker).
-const MINIMAL_ADMIN_CONFIG: &str = r#"default_temperature = 0.7
-
-[gateway]
-port = 42617
-host = "127.0.0.1"
-require_pairing = false
-
-[secrets]
-encrypt = false
-
-[channels_config]
-cli = true
-"#;
-
-/// Ensure cluster has an admin instance: create instances/admin and register if missing.
+/// Ensure cluster has an admin instance (delegates to instance_manager).
 /// Returns (workspace_dir, config_path) for the admin instance.
 pub(crate) async fn ensure_admin_instance(cluster_root: &Path) -> Result<(PathBuf, PathBuf)> {
-    let mut reg = InstanceRegistry::load(cluster_root).await?;
-    if reg.get(ADMIN_INSTANCE_ID).is_some() {
-        let admin_dir = cluster_root.join("instances").join(ADMIN_INSTANCE_ID);
-        return Ok((admin_dir.join("workspace"), admin_dir.join("config.toml")));
-    }
-
-    let admin_dir = cluster_root.join("instances").join(ADMIN_INSTANCE_ID);
-    fs::create_dir_all(admin_dir.join("workspace"))
-        .await
-        .with_context(|| format!("Failed to create admin instance dir: {}", admin_dir.display()))?;
-
-    let config_path = admin_dir.join("config.toml");
-    fs::write(&config_path, MINIMAL_ADMIN_CONFIG)
-        .await
-        .with_context(|| format!("Failed to write admin config: {}", config_path.display()))?;
-
-    let created_at = chrono::Utc::now().to_rfc3339();
-    reg.add(InstanceEntry {
-        id: ADMIN_INSTANCE_ID.to_string(),
-        role: InstanceRole::Admin,
-        status: InstanceStatus::Created,
-        config_path: Some(config_path.to_string_lossy().into_owned()),
-        workspace_path: Some(admin_dir.join("workspace").to_string_lossy().into_owned()),
-        gateway_port: Some(ADMIN_GATEWAY_PORT),
-        created_at: Some(created_at),
-        constraints: None,
-        preset: None,
-    });
-    reg.save(cluster_root).await?;
-
-    Ok((admin_dir.join("workspace"), config_path))
+    instance_manager::ensure_admin_instance(cluster_root).await
 }
 
 async fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
@@ -2133,24 +2152,45 @@ async fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
     let (default_config_dir, default_workspace_dir) = if in_cluster_mode {
         let (workspace_dir, config_path) = ensure_admin_instance(&root).await?;
         (
-            config_path.parent().context("admin config path has no parent")?.to_path_buf(),
+            config_path
+                .parent()
+                .context("admin config path has no parent")?
+                .to_path_buf(),
             workspace_dir,
         )
     } else {
         let (c, w) = crate::config::schema::resolve_runtime_dirs_for_onboarding().await?;
-        let create_cluster = Confirm::new()
-            .with_prompt("  Create cluster with admin instance? (y/n)")
-            .default(false)
-            .interact()?;
-        if create_cluster {
-            let (_workspace_dir, config_path) = ensure_admin_instance(&root).await?;
-            let config_dir = config_path
-                .parent()
-                .context("admin config path has no parent")?
-                .to_path_buf();
-            (config_dir.clone(), config_dir.join("workspace"))
+        let resolved_config_path = c.join("config.toml");
+        let first_init_no_config = !resolved_config_path.exists();
+
+        if first_init_no_config {
+            // First-time initialization: default to cluster + admin (董事长) so the default
+            // conversation target is admin when no `--instance` is specified.
+            let (workspace_dir, config_path) = ensure_admin_instance(&root).await?;
+            (
+                config_path
+                    .parent()
+                    .context("admin config path has no parent")?
+                    .to_path_buf(),
+                workspace_dir,
+            )
         } else {
-            (c, w)
+            let create_cluster = Confirm::new()
+                .with_prompt("  Create cluster with admin instance? (y/n)")
+                .default(false)
+                .interact()?;
+            if create_cluster {
+                let (workspace_dir, config_path) = ensure_admin_instance(&root).await?;
+                (
+                    config_path
+                        .parent()
+                        .context("admin config path has no parent")?
+                        .to_path_buf(),
+                    workspace_dir,
+                )
+            } else {
+                (c, w)
+            }
         }
     };
 
@@ -2290,7 +2330,9 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             style("Custom Provider Setup").white().bold(),
             style("— any OpenAI-compatible API").dim()
         );
-        print_bullet("MultiClaw works with ANY API that speaks the OpenAI chat completions format.");
+        print_bullet(
+            "MultiClaw works with ANY API that speaks the OpenAI chat completions format.",
+        );
         print_bullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.");
         println!();
 

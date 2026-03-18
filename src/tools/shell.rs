@@ -543,8 +543,8 @@ mod tests {
             .expect("approved command execution should succeed");
         assert!(allowed.success);
 
-        let _ =
-            tokio::fs::remove_file(std::env::temp_dir().join("multiclaw_shell_approval_test")).await;
+        let _ = tokio::fs::remove_file(std::env::temp_dir().join("multiclaw_shell_approval_test"))
+            .await;
     }
 
     // ── §5.2 Shell timeout enforcement tests ─────────────────
