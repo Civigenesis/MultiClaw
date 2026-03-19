@@ -625,6 +625,83 @@ WhatsApp uses Meta's Cloud API with webhooks (push-based, not polling):
 
 Config: `~/.multiclaw/config.toml` (created by `onboard`)
 
+## Cluster Layout (Multi-instance)
+
+MultiClaw supports a cluster-style layout where **all instances live under**:
+
+`<cluster_root>/instances/<instance_id>/`
+
+Key rules:
+
+- Admin instance is an instance entry under `instances/`:
+  - `instances/admin/` (董事长)
+- If you start the agent **without specifying `--instance`**, runtime routes conversation to **admin**:
+  - `instances/admin/workspace/` (default conversation target)
+- Under each instance, there are entities:
+  - Company entity: the instance root workspace `instances/<instance_id>/` (i.e. the instance `workspace/` is the company’s dialogue space)
+  - CEO entity: `instances/<instance_id>/workspace/entities/ceo/`
+  - Employee entities: `instances/<instance_id>/workspace/entities/<entity_id>/`
+- If you start the agent **without specifying `--entity`**, the conversation is with the **company entity** (instance root workspace / `instances/<instance_id>/workspace/`).
+
+### Full directory tree (default `~/.multiclaw`)
+
+```text
+~/.multiclaw/                                  # <cluster_root> (or MULTICLAW_CLUSTER_ROOT)
+├── config.toml                                # legacy/single-instance config (kept for compatibility)
+├── instances.json                             # cluster registry (instances + constraints)
+├── daemon_state.json                          # daemon runtime state (root scope)
+├── active_workspace.toml                      # optional runtime marker (may be ignored if points to OS temp)
+├── workspace/                                 # legacy/single-instance workspace (kept for compatibility)
+│   ├── AGENTS.md / SOUL.md / IDENTITY.md ...
+│   ├── sessions/
+│   ├── memory/
+│   ├── state/
+│   ├── cron/
+│   └── skills/
+│       └── <skill_name>/
+│           └── ...
+└── instances/
+    ├── admin/                                 # 管理员实例（董事长）
+    │   ├── config.toml
+    │   ├── daemon_state.json
+    │   ├── checkpoints/                       # business checkpoints (optional)
+    │   └── workspace/                         # admin “company entity” workspace
+    │       ├── IDENTITY.md / SOUL.md / AGENTS.md ...
+    │       ├── sessions/                      # admin sessions
+    │       ├── memory/                        # admin memory backend files
+    │       ├── state/                         # admin state (including company drafts)
+    │       │   └── company_drafts/            # create_company draft storage (json)
+    │       ├── cron/
+    │       └── skills/
+    └── <instance_id>/                         # 普通公司实例（单实例多实体）
+        ├── config.toml
+        ├── daemon_state.json
+        ├── checkpoints/
+        └── workspace/                         # company entity workspace (default when no --entity)
+            ├── IDENTITY.md / SOUL.md / AGENTS.md ...
+            ├── sessions/                      # company-level sessions
+            ├── memory/                        # company-level memory
+            ├── state/                         # company-level state
+            ├── cron/
+            ├── skills/
+            ├── entities/                      # entity workspaces (阶段 2)
+            │   ├── ceo/                       # CEO entity (management)
+            │   │   ├── IDENTITY.md / SOUL.md / AGENTS.md ...
+            │   │   ├── sessions/
+            │   │   ├── memory/
+            │   │   ├── state/
+            │   │   └── skills/
+            │   └── <entity_id>/               # employee entities
+            │       ├── IDENTITY.md / SOUL.md / AGENTS.md ...
+            │       ├── sessions/
+            │       ├── memory/
+            │       ├── state/
+            │       └── skills/
+            └── teams/                         # optional shared team directories
+                └── <team_id>/
+                    └── ...
+```
+
 When `multiclaw channel start` is already running, changes to `default_provider`,
 `default_model`, `default_temperature`, `api_key`, `api_url`, and `reliability.*`
 are hot-applied on the next inbound channel message.

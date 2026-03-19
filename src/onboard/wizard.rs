@@ -576,6 +576,17 @@ async fn run_quick_setup_with_home(
         // Admin bootstrap config is intentionally minimal and local-first.
         config.secrets.encrypt = false;
         config.channels_config.cli = true;
+        if !config
+            .autonomy
+            .allowed_commands
+            .iter()
+            .any(|c| c == "multiclaw")
+        {
+            config
+                .autonomy
+                .allowed_commands
+                .push("multiclaw".to_string());
+        }
     }
 
     config.save().await?;

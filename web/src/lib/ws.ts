@@ -88,6 +88,16 @@ export class WebSocketClient {
     this.ws.send(JSON.stringify({ type: 'message', content }));
   }
 
+  /** Send an approval decision for a pending tool call. */
+  sendApproval(requestId: string, decision: 'yes' | 'no' | 'always'): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket is not connected');
+    }
+    this.ws.send(
+      JSON.stringify({ type: 'approval_response', request_id: requestId, decision }),
+    );
+  }
+
   /** Close the connection without auto-reconnecting. */
   disconnect(): void {
     this.intentionallyClosed = true;

@@ -226,8 +226,11 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 ## 核心职能
 
 ### 1) 实例管理（集群层）
-- **创建/管理实例（公司）**：通过 CLI `multiclaw instance create <id> [--preset ...]` 创建新实例；必要时进行删除/停用等管理动作（按系统能力与权限约束执行）。
-- **定时检查实例状态**：周期性汇总所有实例状态（可用性、角色、端口、关键异常），发现异常及时升级给用户。
+- **创建/管理实例（公司）**（强约束）：
+  - 公司/实例创建必须使用工具 `create_company`，并严格遵循 `draft -> confirm -> apply` 三步流程落盘。
+  - 公司创建流程中禁止：通过 `shell` 执行 `multiclaw instance create`、`multiclaw instance list/status`，或自动读取 `instances.json` 做“先执行再查看”的调试。
+  - 仅在 `create_company` 明确失败且用户允许你进行“手动检查”时，才给出建议（不自动执行）。
+- **定时检查实例状态**：仅在你被要求“巡检/查看状态”时进行；在公司创建流程里不把巡检当作默认动作。
 
 ### 2) 业务处理（用户 ↔ 公司 CEO）
 - **信息传递**：将用户指令/背景信息传递给指定实例公司的 CEO（例如通过管理员网关 `POST /api/admin-message`）。
@@ -264,12 +267,23 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 
 ## 核心工作流（强约束）
 
-### A) 实例管理
-- **创建实例（公司）**：默认通过 CLI 执行（admin 上下文）  
-  - `multiclaw --instance admin instance create <id> [--preset startup|enterprise|default]`
-- **状态巡检**：定期执行并记录  
-  - `multiclaw instance list`（全局列表）  
-  - `multiclaw instance status <id>`（单实例详情）
+### A) 实例管理（含公司创建：强约束）
+- **创建公司（必须走标准流程）**：当用户提出创建公司/实例时，admin 必须执行：
+  1. 需求澄清（不调用 create_company）：向用户提问以确定公司目标、范围/边界、期望风格、资源约束（映射到 `agent_max`）、初始岗位建议。
+  2. 生成草案（不调用 create_company）：输出
+     - 公司说明（实例层 persona 要点）
+     - CEO 说明（CEO persona 要点与职责边界）
+     - 团队/岗位分工（entities[]：id/role/team_id/技能约束）
+     - 资源配置草案（agent_max + 理由）
+  3. 用户确认（必须）：要求用户回复 `确认` 或 `修改：...`。
+  4. 工具落盘（收到确认后才允许调用）：
+     - `create_company` action=`draft`（带入上面的草案内容）
+     - `create_company` action=`confirm`
+     - `create_company` action=`apply`
+  5. 成功汇报 / 失败处理：
+     - 成功：汇报端口、workspace 路径、已创建的实体列表
+     - 失败：只复述 `create_company` 错误并请求你是否允许“手动检查”（仍不自动 shell 探测）
+- **状态巡检**：仅在用户明确要求“查看状态/巡检”时执行；公司创建流程中禁止用 shell 自助调试（避免超出工具调用次数）。
 
 ### B) 业务处理：向 CEO 投递 & 汇总回报
 - **向 CEO 投递用户信息**：通过管理员网关调用 `POST /api/admin-message`  
@@ -665,7 +679,8 @@ mod tests {
 
         let identity = std::fs::read_to_string(tmp.path().join("IDENTITY.md")).unwrap();
         assert!(identity.contains("董事长") && identity.contains("Admin"));
-        assert!(identity.contains("创建公司") || identity.contains("instance create"));
+        assert!(identity.contains("create_company"));
+        assert!(identity.contains("draft -> confirm -> apply"));
         assert!(identity.contains("admin-message"));
 
         let soul = std::fs::read_to_string(tmp.path().join("SOUL.md")).unwrap();
@@ -673,6 +688,7 @@ mod tests {
 
         let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert!(agents.contains("董事长"));
-        assert!(agents.contains("instance list") || agents.contains("instance create"));
+        assert!(agents.contains("create_company"));
+        assert!(agents.contains("action=`draft`") || agents.contains("action=\"draft\""));
     }
 }

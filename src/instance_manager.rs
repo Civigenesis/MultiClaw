@@ -24,6 +24,10 @@ port = 42617
 host = "127.0.0.1"
 require_pairing = false
 
+[autonomy]
+# Allow cluster administration via CLI from the admin instance.
+allowed_commands = ["multiclaw"]
+
 [secrets]
 encrypt = false
 

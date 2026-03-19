@@ -3814,10 +3814,45 @@ fn active_workspace_state_path(default_dir: &Path) -> PathBuf {
 /// Returns `true` if `path` lives under the OS temp directory.
 fn is_temp_directory(path: &Path) -> bool {
     let temp = std::env::temp_dir();
-    // Canonicalize when possible to handle symlinks (macOS /var → /private/var)
+    // Be tolerant on macOS: /var/folders/... is commonly reachable as /private/var/folders/...
+    // We check both canonicalized and raw prefixes.
     let canon_temp = temp.canonicalize().unwrap_or_else(|_| temp.clone());
     let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canon_path.starts_with(&canon_temp)
+
+    if canon_path.starts_with(&canon_temp) {
+        return true;
+    }
+    if path.starts_with(&temp) {
+        return true;
+    }
+
+    // Fallback to string prefix checks for the /var <-> /private/var alias.
+    // This catches cases where canonicalization does not preserve the expected prefix.
+    let temp_s = temp.to_string_lossy();
+    let canon_temp_s = canon_temp.to_string_lossy();
+    let path_s = path.to_string_lossy();
+
+    if !temp_s.is_empty() && path_s.starts_with(temp_s.as_ref()) {
+        return true;
+    }
+    if !canon_temp_s.is_empty() && path_s.starts_with(canon_temp_s.as_ref()) {
+        return true;
+    }
+
+    // Try swapping /var/ and /private/var/ once.
+    if temp_s.starts_with("/var/") {
+        let alt = temp_s.replacen("/var/", "/private/var/", 1);
+        if !alt.is_empty() && path_s.starts_with(&alt) {
+            return true;
+        }
+    } else if temp_s.starts_with("/private/var/") {
+        let alt = temp_s.replacen("/private/var/", "/var/", 1);
+        if !alt.is_empty() && path_s.starts_with(&alt) {
+            return true;
+        }
+    }
+
+    false
 }
 
 async fn load_persisted_workspace_dirs(
@@ -3865,6 +3900,18 @@ async fn load_persisted_workspace_dirs(
     } else {
         default_config_dir.join(parsed_dir)
     };
+
+    // In production/real runs, never trust a marker that points into OS temp.
+    // This prevents one-off test/temp runs from hijacking the daemon's config resolution.
+    #[cfg(not(test))]
+    if is_temp_directory(&config_dir) {
+        tracing::warn!(
+            path = %config_dir.display(),
+            "Ignoring active workspace marker pointing to a temporary directory"
+        );
+        return Ok(None);
+    }
+
     Ok(Some((config_dir.clone(), config_dir.join("workspace"))))
 }
 
@@ -4173,7 +4220,13 @@ impl Config {
                 .filter(|s| !s.trim().is_empty())
         });
         let root = cluster_root()?;
-        let in_cluster_mode = is_cluster_mode(&root);
+        // If the cluster directory contains admin, treat it as cluster mode even if
+        // other markers (instances.json) are missing or temporarily inconsistent.
+        let in_cluster_mode = is_cluster_mode(&root)
+            || root
+                .join("instances")
+                .join(multiclaw::instance_manager::ADMIN_INSTANCE_ID)
+                .is_dir();
 
         // Default to admin when in cluster mode but no instance specified (董事长 as default conversation target).
         let effective_instance_id: Option<String> = if in_cluster_mode && instance_id.is_none() {
@@ -7227,6 +7280,13 @@ default_model = "legacy-model"
         } else {
             std::env::remove_var("HOME");
         }
+        // Ensure marker file is removed even if the directory cleanup changes.
+        let _ = fs::remove_file(
+            temp_home
+                .join(".multiclaw")
+                .join(ACTIVE_WORKSPACE_STATE_FILE),
+        )
+        .await;
         let _ = fs::remove_dir_all(temp_home).await;
     }
 
@@ -7264,6 +7324,13 @@ default_model = "legacy-model"
         } else {
             std::env::remove_var("HOME");
         }
+        // Ensure marker file is removed even if the directory cleanup changes.
+        let _ = fs::remove_file(
+            temp_home
+                .join(".multiclaw")
+                .join(ACTIVE_WORKSPACE_STATE_FILE),
+        )
+        .await;
         let _ = fs::remove_dir_all(temp_home).await;
     }
 
@@ -7294,6 +7361,8 @@ default_model = "legacy-model"
         } else {
             std::env::remove_var("HOME");
         }
+        // Ensure marker file is removed.
+        let _ = fs::remove_file(default_config_dir.join(ACTIVE_WORKSPACE_STATE_FILE)).await;
         let _ = fs::remove_dir_all(temp_home).await;
     }
 

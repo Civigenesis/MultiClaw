@@ -1743,11 +1743,13 @@ async fn process_channel_message(
                 runtime_defaults.temperature,
                 true,
                 None,
+                None,
                 msg.channel.as_str(),
                 &ctx.multimodal,
                 ctx.max_tool_iterations,
                 Some(cancellation_token.clone()),
                 delta_tx,
+                None,
                 ctx.hooks.as_deref(),
                 if msg.channel == "cli" {
                     &[]

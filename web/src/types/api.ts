@@ -95,11 +95,23 @@ export interface SSEEvent {
 }
 
 export interface WsMessage {
-  type: 'message' | 'chunk' | 'tool_call' | 'tool_result' | 'done' | 'error';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'tool_call'
+    | 'tool_result'
+    | 'approval_request'
+    | 'done'
+    | 'error';
   content?: string;
   full_response?: string;
   name?: string;
   args?: any;
   output?: string;
+  tool_call_id?: string | null;
+  success?: boolean;
+  duration_ms?: number;
+  request_id?: string;
+  tool_name?: string;
   message?: string;
 }

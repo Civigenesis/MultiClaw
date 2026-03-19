@@ -1,4 +1,4 @@
-use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalResponse};
+use crate::approval::{ApprovalManager, ApprovalPrompter, ApprovalRequest, ApprovalResponse};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::multimodal;
@@ -83,6 +83,26 @@ pub(crate) fn scrub_credentials(input: &str) -> String {
             }
         })
         .to_string()
+}
+
+fn scrub_json_credentials(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                if SENSITIVE_KEY_PATTERNS.is_match(k) {
+                    out.insert(k.clone(), serde_json::Value::String("*[REDACTED]*".into()));
+                } else {
+                    out.insert(k.clone(), scrub_json_credentials(v));
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(scrub_json_credentials).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Default trigger for auto-compaction when non-system message count exceeds this threshold.
@@ -1884,9 +1904,11 @@ pub(crate) async fn agent_turn(
         temperature,
         silent,
         None,
+        None,
         "channel",
         multimodal_config,
         max_tool_iterations,
+        None,
         None,
         None,
         None,
@@ -2074,11 +2096,13 @@ pub(crate) async fn run_tool_call_loop(
     temperature: f64,
     silent: bool,
     approval: Option<&ApprovalManager>,
+    approval_prompter: Option<&dyn ApprovalPrompter>,
     channel_name: &str,
     multimodal_config: &crate::config::MultimodalConfig,
     max_tool_iterations: usize,
     cancellation_token: Option<CancellationToken>,
     on_delta: Option<tokio::sync::mpsc::Sender<String>>,
+    on_event: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hooks: Option<&crate::hooks::HookRunner>,
     excluded_tools: &[String],
 ) -> Result<String> {
@@ -2434,6 +2458,17 @@ pub(crate) async fn run_tool_call_loop(
                                 duration: Duration::ZERO,
                             },
                         ));
+                        if let Some(ref tx) = on_event {
+                            let _ = tx
+                                .send(serde_json::json!({
+                                    "type": "tool_result",
+                                    "name": call.name.clone(),
+                                    "tool_call_id": call.tool_call_id.clone(),
+                                    "success": false,
+                                    "output": scrub_credentials(&reason),
+                                }))
+                                .await;
+                        }
                         continue;
                     }
                     crate::hooks::HookResult::Continue((name, args)) => {
@@ -2451,10 +2486,13 @@ pub(crate) async fn run_tool_call_loop(
                         arguments: tool_args.clone(),
                     };
 
-                    // Only prompt interactively on CLI; auto-approve on other channels.
+                    // CLI prompts synchronously; other channels may provide an async prompter.
                     let decision = if channel_name == "cli" {
                         mgr.prompt_cli(&request)
+                    } else if let Some(prompter) = approval_prompter {
+                        prompter.prompt(request.clone()).await
                     } else {
+                        // Backward compatible default for non-interactive channels.
                         ApprovalResponse::Yes
                     };
 
@@ -2462,6 +2500,17 @@ pub(crate) async fn run_tool_call_loop(
 
                     if decision == ApprovalResponse::No {
                         let denied = "Denied by user.".to_string();
+                        if let Some(ref tx) = on_event {
+                            let _ = tx
+                                .send(serde_json::json!({
+                                    "type": "tool_result",
+                                    "name": tool_name.clone(),
+                                    "tool_call_id": call.tool_call_id.clone(),
+                                    "success": false,
+                                    "output": denied,
+                                }))
+                                .await;
+                        }
                         runtime_trace::record_event(
                             "tool_call_result",
                             Some(channel_name),
@@ -2517,11 +2566,33 @@ pub(crate) async fn run_tool_call_loop(
                     ToolExecutionOutcome {
                         output: duplicate.clone(),
                         success: false,
-                        error_reason: Some(duplicate),
+                        error_reason: Some(duplicate.clone()),
                         duration: Duration::ZERO,
                     },
                 ));
+                if let Some(ref tx) = on_event {
+                    let _ = tx
+                        .send(serde_json::json!({
+                            "type": "tool_result",
+                            "name": tool_name.clone(),
+                            "tool_call_id": call.tool_call_id.clone(),
+                            "success": false,
+                            "output": duplicate,
+                        }))
+                        .await;
+                }
                 continue;
+            }
+
+            if let Some(ref tx) = on_event {
+                let _ = tx
+                    .send(serde_json::json!({
+                        "type": "tool_call",
+                        "name": tool_name.clone(),
+                        "tool_call_id": call.tool_call_id.clone(),
+                        "args": scrub_json_credentials(&tool_args),
+                    }))
+                    .await;
             }
 
             runtime_trace::record_event(
@@ -2607,6 +2678,19 @@ pub(crate) async fn run_tool_call_loop(
                 };
                 hooks
                     .fire_after_tool_call(&call.name, &tool_result_obj, outcome.duration)
+                    .await;
+            }
+
+            if let Some(ref tx) = on_event {
+                let _ = tx
+                    .send(serde_json::json!({
+                        "type": "tool_result",
+                        "name": call.name.clone(),
+                        "tool_call_id": call.tool_call_id.clone(),
+                        "success": outcome.success,
+                        "output": scrub_credentials(&outcome.output),
+                        "duration_ms": outcome.duration.as_millis(),
+                    }))
                     .await;
             }
 
@@ -3110,9 +3194,11 @@ pub async fn run(
             temperature,
             false,
             approval_manager.as_ref(),
+            None,
             channel_name,
             &config.multimodal,
             config.agent.max_tool_iterations,
+            None,
             None,
             None,
             None,
@@ -3232,9 +3318,11 @@ pub async fn run(
                 temperature,
                 false,
                 approval_manager.as_ref(),
+                None,
                 channel_name,
                 &config.multimodal,
                 config.agent.max_tool_iterations,
+                None,
                 None,
                 None,
                 None,
@@ -3293,6 +3381,21 @@ pub async fn run(
 /// Process a single message through the full agent (with tools, peripherals, memory).
 /// Used by channels (Telegram, Discord, etc.) to enable hardware and tool use.
 pub async fn process_message(config: Config, message: &str) -> Result<String> {
+    process_message_streaming(config, message, None, None, None).await
+}
+
+/// Process a single message with optional streaming callbacks.
+///
+/// - `on_delta`: emits text chunks (suitable for WS `chunk`)
+/// - `on_event`: emits structured events (e.g. WS `tool_call/tool_result/approval_request`)
+/// - `approval_prompter`: when provided, supervised-mode tool approvals can be decided by the caller
+pub async fn process_message_streaming(
+    config: Config,
+    message: &str,
+    on_delta: Option<tokio::sync::mpsc::Sender<String>>,
+    on_event: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    approval_prompter: Option<&dyn ApprovalPrompter>,
+) -> Result<String> {
     let observer: Arc<dyn Observer> =
         Arc::from(observability::create_observer(&config.observability));
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
@@ -3479,7 +3582,10 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         ChatMessage::user(&enriched),
     ];
 
-    agent_turn(
+    // For web console / streaming channels, approvals can be interactive.
+    // For other channels, approval_prompter is None and supervised mode defaults to Yes (backward compatible).
+    let approval_manager = ApprovalManager::from_config(&config.autonomy);
+    run_tool_call_loop(
         provider.as_ref(),
         &mut history,
         &tools_registry,
@@ -3488,8 +3594,16 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         &model_name,
         config.default_temperature,
         true,
+        Some(&approval_manager),
+        approval_prompter,
+        "gateway",
         &config.multimodal,
         config.agent.max_tool_iterations,
+        None,
+        on_delta,
+        on_event,
+        None,
+        &[],
     )
     .await
 }
@@ -3796,9 +3910,11 @@ mod tests {
             0.0,
             true,
             None,
+            None,
             "cli",
             &crate::config::MultimodalConfig::default(),
             3,
+            None,
             None,
             None,
             None,
@@ -3842,9 +3958,11 @@ mod tests {
             0.0,
             true,
             None,
+            None,
             "cli",
             &multimodal,
             3,
+            None,
             None,
             None,
             None,
@@ -3882,9 +4000,11 @@ mod tests {
             0.0,
             true,
             None,
+            None,
             "cli",
             &crate::config::MultimodalConfig::default(),
             3,
+            None,
             None,
             None,
             None,
@@ -4008,9 +4128,11 @@ mod tests {
             0.0,
             true,
             Some(&approval_mgr),
+            None,
             "telegram",
             &crate::config::MultimodalConfig::default(),
             4,
+            None,
             None,
             None,
             None,
@@ -4077,9 +4199,11 @@ mod tests {
             0.0,
             true,
             None,
+            None,
             "cli",
             &crate::config::MultimodalConfig::default(),
             4,
+            None,
             None,
             None,
             None,
@@ -4133,9 +4257,11 @@ mod tests {
             0.0,
             true,
             None,
+            None,
             "cli",
             &crate::config::MultimodalConfig::default(),
             4,
+            None,
             None,
             None,
             None,

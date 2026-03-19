@@ -5,6 +5,7 @@
 
 use crate::config::AutonomyConfig;
 use crate::security::AutonomyLevel;
+use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,12 @@ use std::io::{self, BufRead, Write};
 pub struct ApprovalRequest {
     pub tool_name: String,
     pub arguments: serde_json::Value,
+}
+
+/// Async approval prompter for non-CLI channels (e.g. Web console).
+#[async_trait]
+pub trait ApprovalPrompter: Send + Sync {
+    async fn prompt(&self, request: ApprovalRequest) -> ApprovalResponse;
 }
 
 /// The user's response to an approval request.

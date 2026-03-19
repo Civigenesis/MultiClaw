@@ -8,6 +8,8 @@ interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
   timestamp: Date;
+  kind?: 'text' | 'tool_call' | 'tool_result' | 'approval';
+  approvalRequestId?: string;
 }
 
 export default function AgentChat() {
@@ -70,7 +72,10 @@ export default function AgentChat() {
             {
               id: crypto.randomUUID(),
               role: 'agent',
-              content: `[Tool Call] ${msg.name ?? 'unknown'}(${JSON.stringify(msg.args ?? {})})`,
+              kind: 'tool_call',
+              content: `[Tool Call] ${msg.name ?? 'unknown'}(${JSON.stringify(
+                msg.args ?? {},
+              )})`,
               timestamp: new Date(),
             },
           ]);
@@ -82,11 +87,30 @@ export default function AgentChat() {
             {
               id: crypto.randomUUID(),
               role: 'agent',
+              kind: 'tool_result',
               content: `[Tool Result] ${msg.output ?? ''}`,
               timestamp: new Date(),
             },
           ]);
           break;
+
+        case 'approval_request': {
+          const toolName = msg.tool_name ?? msg.name ?? 'unknown';
+          const requestId = msg.request_id ?? '';
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: requestId || crypto.randomUUID(),
+              role: 'agent',
+              kind: 'approval',
+              approvalRequestId: requestId,
+              content: `Approval required: ${toolName}\n${JSON.stringify(msg.args ?? {}, null, 2)}`,
+              timestamp: new Date(),
+            },
+          ]);
+          setTyping(true);
+          break;
+        }
 
         case 'error':
           setMessages((prev) => [
@@ -140,6 +164,25 @@ export default function AgentChat() {
 
     setInput('');
     inputRef.current?.focus();
+  };
+
+  const handleApproval = (requestId: string | undefined, decision: 'yes' | 'no' | 'always') => {
+    if (!requestId || !wsRef.current?.connected) return;
+    try {
+      wsRef.current.sendApproval(requestId, decision);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.approvalRequestId === requestId
+            ? {
+                ...m,
+                content: `${m.content}\n\n[Decision] ${decision.toUpperCase()}`,
+              }
+            : m,
+        ),
+      );
+    } catch {
+      setError('Failed to send approval decision. Please try again.');
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -197,6 +240,28 @@ export default function AgentChat() {
               }`}
             >
               <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+              {msg.kind === 'approval' && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleApproval(msg.approvalRequestId, 'yes')}
+                    className="text-xs px-3 py-1 rounded-lg bg-green-700 hover:bg-green-600 text-white"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => handleApproval(msg.approvalRequestId, 'no')}
+                    className="text-xs px-3 py-1 rounded-lg bg-red-700 hover:bg-red-600 text-white"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    onClick={() => handleApproval(msg.approvalRequestId, 'always')}
+                    className="text-xs px-3 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-white"
+                  >
+                    Always
+                  </button>
+                </div>
+              )}
               <p
                 className={`text-xs mt-1 ${
                   msg.role === 'user' ? 'text-blue-200' : 'text-gray-500'

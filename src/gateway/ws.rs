@@ -10,6 +10,7 @@
 //! ```
 
 use super::AppState;
+use crate::approval::{ApprovalPrompter, ApprovalRequest, ApprovalResponse};
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -19,6 +20,10 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct WsQuery {
@@ -69,6 +74,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         };
 
         let msg_type = parsed["type"].as_str().unwrap_or("");
+        if msg_type == "approval_response" {
+            // Approval response frames are handled by the per-turn prompter (stored in turn state).
+            // We ignore them here because the turn loop owns the pending table.
+            continue;
+        }
         if msg_type != "message" {
             continue;
         }
@@ -93,75 +103,194 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             "model": state.model,
         }));
 
-        // Simple single-turn chat (no streaming for now — use provider.chat_with_system)
-        let system_prompt = {
-            let config_guard = state.config.lock();
-            crate::channels::build_system_prompt(
-                &config_guard.workspace_dir,
-                &state.model,
-                &[],
-                &[],
-                Some(&config_guard.identity),
-                None,
+        // Per-turn channels for streaming
+        let (delta_tx, mut delta_rx) = mpsc::channel::<String>(256);
+        let (event_tx, mut event_rx) = mpsc::channel::<serde_json::Value>(256);
+        let approvals = Arc::new(WsApprovalTable::default());
+        let prompter = WsApprovalPrompter::new(event_tx.clone(), Arc::clone(&approvals));
+
+        // Spawn agent processing for this message
+        let state_for_task = state.clone();
+        let content_for_task = content.clone();
+        let prompter_ref: Arc<dyn ApprovalPrompter> = Arc::new(prompter);
+        let mut agent_task = tokio::spawn(async move {
+            let cfg = state_for_task.config.lock().clone();
+            crate::agent::process_message_streaming(
+                cfg,
+                &content_for_task,
+                Some(delta_tx),
+                Some(event_tx),
+                Some(prompter_ref.as_ref()),
             )
-        };
-
-        let messages = vec![
-            crate::providers::ChatMessage::system(system_prompt),
-            crate::providers::ChatMessage::user(&content),
-        ];
-
-        let multimodal_config = state.config.lock().multimodal.clone();
-        let prepared =
-            match crate::multimodal::prepare_messages_for_provider(&messages, &multimodal_config)
-                .await
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    let err = serde_json::json!({
-                        "type": "error",
-                        "message": format!("Multimodal prep failed: {e}")
-                    });
-                    let _ = sender.send(Message::Text(err.to_string().into())).await;
-                    continue;
-                }
-            };
-
-        match state
-            .provider
-            .chat_with_history(&prepared.messages, &state.model, state.temperature)
             .await
-        {
-            Ok(response) => {
-                // Send the full response as a done message
-                let done = serde_json::json!({
-                    "type": "done",
-                    "full_response": response,
-                });
-                let _ = sender.send(Message::Text(done.to_string().into())).await;
+        });
 
-                // Broadcast agent_end event
-                let _ = state.event_tx.send(serde_json::json!({
-                    "type": "agent_end",
-                    "provider": provider_label,
-                    "model": state.model,
-                }));
-            }
-            Err(e) => {
-                let sanitized = crate::providers::sanitize_api_error(&e.to_string());
-                let err = serde_json::json!({
-                    "type": "error",
-                    "message": sanitized,
-                });
-                let _ = sender.send(Message::Text(err.to_string().into())).await;
+        // Forward incoming approval responses while the turn runs.
+        // NOTE: We multiplex by polling the original websocket receiver outside this loop,
+        // so within a single-turn loop we only handle approvals by reading from `receiver`
+        // again in a non-blocking fashion below.
 
-                // Broadcast error event
-                let _ = state.event_tx.send(serde_json::json!({
-                    "type": "error",
-                    "component": "ws_chat",
-                    "message": sanitized,
-                }));
+        let mut final_response: Option<String> = None;
+        loop {
+            tokio::select! {
+                maybe_delta = delta_rx.recv() => {
+                    if let Some(delta) = maybe_delta {
+                        if delta == crate::agent::loop_::DRAFT_CLEAR_SENTINEL {
+                            let clear = serde_json::json!({"type":"chunk","content":""});
+                            let _ = sender.send(Message::Text(clear.to_string().into())).await;
+                            continue;
+                        }
+                        let chunk = serde_json::json!({"type":"chunk","content":delta});
+                        let _ = sender.send(Message::Text(chunk.to_string().into())).await;
+                    }
+                }
+                maybe_event = event_rx.recv() => {
+                    if let Some(ev) = maybe_event {
+                        let _ = sender.send(Message::Text(ev.to_string().into())).await;
+                    }
+                }
+                maybe_incoming = receiver.next() => {
+                    // Handle approval responses interleaved while waiting for agent completion.
+                    match maybe_incoming {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if v.get("type").and_then(|t| t.as_str()) == Some("approval_response") {
+                                    if let (Some(request_id), Some(decision)) = (
+                                        v.get("request_id").and_then(|x| x.as_str()),
+                                        v.get("decision").and_then(|x| x.as_str()),
+                                    ) {
+                                        approvals.resolve(request_id, decision);
+                                    }
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) => return,
+                        Some(Err(_)) => return,
+                        _ => {}
+                    }
+                }
+                res = &mut agent_task => {
+                    match res {
+                        Ok(Ok(resp)) => { final_response = Some(resp); }
+                        Ok(Err(e)) => {
+                            let sanitized = crate::providers::sanitize_api_error(&e.to_string());
+                            let err = serde_json::json!({"type":"error","message":sanitized});
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        }
+                        Err(e) => {
+                            let err = serde_json::json!({"type":"error","message":format!("agent task failed: {e}")});
+                            let _ = sender.send(Message::Text(err.to_string().into())).await;
+                        }
+                    }
+                    break;
+                }
             }
+        }
+
+        if let Some(response) = final_response {
+            let done = serde_json::json!({
+                "type": "done",
+                "full_response": response,
+            });
+            let _ = sender.send(Message::Text(done.to_string().into())).await;
+        }
+
+        // Broadcast agent_end event
+        let _ = state.event_tx.send(serde_json::json!({
+            "type": "agent_end",
+            "provider": provider_label,
+            "model": state.model,
+        }));
+    }
+}
+
+#[derive(Default)]
+struct WsApprovalTable {
+    pending: parking_lot::Mutex<HashMap<String, oneshot::Sender<ApprovalResponse>>>,
+}
+
+impl WsApprovalTable {
+    fn resolve(&self, request_id: &str, decision: &str) {
+        let decision = match decision {
+            "yes" => ApprovalResponse::Yes,
+            "no" => ApprovalResponse::No,
+            "always" => ApprovalResponse::Always,
+            _ => ApprovalResponse::No,
+        };
+        let mut pending = self.pending.lock();
+        if let Some(tx) = pending.remove(request_id) {
+            let _ = tx.send(decision);
+        }
+    }
+}
+
+struct WsApprovalPrompter {
+    event_tx: mpsc::Sender<serde_json::Value>,
+    table: Arc<WsApprovalTable>,
+}
+
+impl WsApprovalPrompter {
+    fn new(event_tx: mpsc::Sender<serde_json::Value>, table: Arc<WsApprovalTable>) -> Self {
+        Self { event_tx, table }
+    }
+}
+
+fn scrub_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                let lk = k.to_ascii_lowercase();
+                if lk.contains("token")
+                    || lk.contains("api_key")
+                    || lk.contains("password")
+                    || lk.contains("secret")
+                    || lk.contains("bearer")
+                    || lk.contains("credential")
+                {
+                    out.insert(k.clone(), serde_json::Value::String("*[REDACTED]*".into()));
+                } else {
+                    out.insert(k.clone(), scrub_json(v));
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(scrub_json).collect())
+        }
+        serde_json::Value::String(s) => {
+            // avoid flooding the UI with huge payloads
+            if s.chars().count() > 400 {
+                serde_json::Value::String(format!("{}…", s.chars().take(400).collect::<String>()))
+            } else {
+                serde_json::Value::String(s.clone())
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+#[async_trait::async_trait]
+impl ApprovalPrompter for WsApprovalPrompter {
+    async fn prompt(&self, request: ApprovalRequest) -> ApprovalResponse {
+        let request_id = Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel::<ApprovalResponse>();
+        self.table.pending.lock().insert(request_id.clone(), tx);
+
+        let args = scrub_json(&request.arguments);
+        let _ = self
+            .event_tx
+            .send(serde_json::json!({
+                "type": "approval_request",
+                "request_id": request_id,
+                "tool_name": request.tool_name,
+                "args": args,
+            }))
+            .await;
+
+        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+            Ok(Ok(decision)) => decision,
+            _ => ApprovalResponse::No,
         }
     }
 }
