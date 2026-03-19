@@ -44,6 +44,8 @@ Use this skill when CEO handles "create role/member/team" requests.
 - Prefer one-shot `create_entity` with inline persona fields.
 - Do not use `shell` for team/entity creation.
 - Do not use absolute paths in file operations.
+- `team_id` should be explicit; if unknown use `unassigned`.
+- `skills` must be tool allowlist names, not business capability labels.
 - If tool call fails, fix payload and retry; do not degrade into ad-hoc multi-file writes unless explicitly requested.
 
 ## Output Checklist

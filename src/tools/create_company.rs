@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use multiclaw::instance_manager;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -246,6 +247,57 @@ fn role_based_default_skills(role: Option<&str>) -> Option<Vec<String>> {
         ]);
     }
     None
+}
+
+const DEFAULT_TEAM_ID: &str = "unassigned";
+
+fn allowed_entity_skills() -> HashSet<&'static str> {
+    [
+        "file_read",
+        "file_write",
+        "file_edit",
+        "glob_search",
+        "content_search",
+        "memory_store",
+        "memory_recall",
+        "memory_forget",
+        "schedule",
+        "web_search_tool",
+        "web_fetch",
+        "http_request",
+        "image_info",
+        "pdf_read",
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn normalize_entity_skills(skills: Option<Vec<String>>, role: Option<&str>) -> Result<Vec<String>> {
+    let allow = allowed_entity_skills();
+    let source = skills
+        .or_else(|| role_based_default_skills(role))
+        .unwrap_or_else(|| {
+            vec![
+                "file_read".into(),
+                "file_write".into(),
+                "memory_recall".into(),
+            ]
+        });
+    let mut normalized = Vec::new();
+    for s in source {
+        let skill = s.trim().to_string();
+        if skill.is_empty() {
+            continue;
+        }
+        if !allow.contains(skill.as_str()) {
+            bail!(
+                "invalid entity skill '{}': skills must be tool allowlist names (e.g. file_read, memory_recall), not business capability labels",
+                skill
+            );
+        }
+        normalized.push(skill);
+    }
+    Ok(normalized)
 }
 
 fn fallback_entity_identity(company_id: &str, ed: &EntityDraft) -> String {
@@ -493,16 +545,19 @@ async fn apply_to_instance(
         if inst.entities.iter().any(|e| e.id == id) {
             continue;
         }
+        let team_id = ed
+            .team_id
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| Some(DEFAULT_TEAM_ID.to_string()));
+        let skills = normalize_entity_skills(ed.skills.clone(), ed.role.as_deref())?;
         inst.entities.push(EntityConfig {
             id: id.to_string(),
             provider: ed.provider.clone(),
             model: ed.model.clone(),
-            team_id: ed.team_id.clone(),
+            team_id,
             role: ed.role.clone(),
-            skills: ed
-                .skills
-                .clone()
-                .or_else(|| role_based_default_skills(ed.role.as_deref())),
+            skills: Some(skills),
         });
     }
     cfg.save().await?;

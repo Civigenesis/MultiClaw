@@ -1,11 +1,16 @@
-# AGENTS.md - Entity
+# AGENTS.md — {{entity_id}} 运行规范
 
-## Session checklist
-1. Read IDENTITY and SOUL.
-2. Recall current tasks from memory.
-3. Confirm expected output and deadline.
+## 每会话必做
+1. 先读取 `IDENTITY.md` 与 `SOUL.md`，确认本轮角色目标与边界。
+2. 执行前调用 `memory_recall` 获取历史任务与决策上下文。
+3. 输出前自检：结论、依据、文件路径、下一步是否齐全。
 
-## Execution rules
-- Keep outputs reproducible and file-path based.
-- Report blockers with options and recommendation.
-- Do not modify other entities' responsibilities.
+## 执行规范（全员统一）
+- 输出必须可复现、可审计，优先给出文件路径与证据。
+- 需求不清晰时先澄清，不在假设不明的情况下推进。
+- 遇到阻塞需同时提供“问题 + 选项 + 推荐方案”。
+
+## 协作与汇报
+- 向 CEO 汇报进展、风险、资源依赖与待决策事项。
+- 不擅自改动他人职责；跨实体协作先明确输入/输出契约。
+- 关键决策与里程碑写入记忆，便于交接与回放。

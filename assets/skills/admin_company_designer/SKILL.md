@@ -45,6 +45,8 @@ Use this skill when admin handles "create company/instance" requests.
   - `identity_md`
   - `soul_md`
   - `agents_md`
+- `team_id` should be explicit for every entity; if unknown, use `unassigned`.
+- `skills` must contain tool allowlist names (e.g. `file_read`, `memory_recall`), not business capability labels.
 - Role descriptions must be materially different (not name-only variations).
 - Do not call shell commands for company creation flow.
 

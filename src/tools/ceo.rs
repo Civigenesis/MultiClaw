@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -131,6 +132,97 @@ struct CreateEntityArgs {
     agents_md: Option<String>,
 }
 
+const DEFAULT_TEAM_ID: &str = "unassigned";
+
+fn allowed_entity_skills() -> HashSet<&'static str> {
+    [
+        "file_read",
+        "file_write",
+        "file_edit",
+        "glob_search",
+        "content_search",
+        "memory_store",
+        "memory_recall",
+        "memory_forget",
+        "schedule",
+        "web_search_tool",
+        "web_fetch",
+        "http_request",
+        "image_info",
+        "pdf_read",
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn role_based_default_skills(role: Option<&str>) -> Vec<String> {
+    let role = role.unwrap_or("").to_ascii_lowercase();
+    if role.contains("增长") || role.contains("growth") {
+        return vec![
+            "memory_recall".into(),
+            "memory_store".into(),
+            "file_read".into(),
+            "file_write".into(),
+            "web_search_tool".into(),
+            "content_search".into(),
+        ];
+    }
+    if role.contains("设计") || role.contains("design") {
+        return vec![
+            "file_read".into(),
+            "file_write".into(),
+            "file_edit".into(),
+            "image_info".into(),
+            "memory_recall".into(),
+            "memory_store".into(),
+        ];
+    }
+    if role.contains("内容") || role.contains("content") {
+        return vec![
+            "file_read".into(),
+            "file_write".into(),
+            "file_edit".into(),
+            "memory_recall".into(),
+            "memory_store".into(),
+            "web_search_tool".into(),
+        ];
+    }
+    if role.contains("运营") || role.contains("ops") {
+        return vec![
+            "memory_recall".into(),
+            "memory_store".into(),
+            "file_read".into(),
+            "file_write".into(),
+            "schedule".into(),
+        ];
+    }
+    vec![
+        "file_read".into(),
+        "file_write".into(),
+        "memory_recall".into(),
+    ]
+}
+
+fn normalize_entity_skills(skills: Option<Vec<String>>, role: Option<&str>) -> Result<Vec<String>> {
+    let allow = allowed_entity_skills();
+    let result = skills.unwrap_or_else(|| role_based_default_skills(role));
+    let mut normalized = Vec::new();
+    for s in result {
+        let skill = s.trim().to_string();
+        if skill.is_empty() {
+            continue;
+        }
+        if !allow.contains(skill.as_str()) {
+            anyhow::bail!(
+                "invalid entity skill '{}': skills must be tool allowlist names (e.g. file_read, memory_recall), not business capability labels",
+                skill
+            );
+        }
+        normalized.push(skill);
+    }
+    Ok(normalized)
+}
+
 #[async_trait]
 impl Tool for CreateEntityTool {
     fn name(&self) -> &str {
@@ -217,13 +309,25 @@ impl Tool for CreateEntityTool {
             });
         }
 
+        let team_id = args.team_id.filter(|s| !s.trim().is_empty());
+        let team_id = Some(team_id.unwrap_or_else(|| DEFAULT_TEAM_ID.to_string()));
+        let skills = match normalize_entity_skills(args.skills, args.role.as_deref()) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(e.to_string()),
+                });
+            }
+        };
         let entity_config = EntityConfig {
             id: id.to_string(),
             provider: args.provider,
             model: args.model,
-            team_id: args.team_id,
+            team_id,
             role: args.role,
-            skills: args.skills,
+            skills: Some(skills),
         };
         instance.entities.push(entity_config.clone());
         config
