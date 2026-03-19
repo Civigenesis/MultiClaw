@@ -123,6 +123,12 @@ struct CreateEntityArgs {
     role: Option<String>,
     #[serde(default)]
     skills: Option<Vec<String>>,
+    #[serde(default)]
+    identity_md: Option<String>,
+    #[serde(default)]
+    soul_md: Option<String>,
+    #[serde(default)]
+    agents_md: Option<String>,
 }
 
 #[async_trait]
@@ -132,7 +138,7 @@ impl Tool for CreateEntityTool {
     }
 
     fn description(&self) -> &str {
-        "Create a new entity in this instance (CEO only). Persists to config [[instance.entities]], creates workspace/entities/<id>/ with IDENTITY.md and AGENTS.md. You must define the member's responsibilities and workflow (50–200 words) and write or update that entity's IDENTITY.md and AGENTS.md after creation. Subject to agent_max limit."
+        "Create a new entity in this instance (CEO only). Persists to config [[instance.entities]], creates workspace/entities/<id>/, and optionally writes identity_md/soul_md/agents_md directly in one call. Subject to agent_max limit."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -144,7 +150,10 @@ impl Tool for CreateEntityTool {
                 "model": { "type": "string", "description": "Optional model override" },
                 "team_id": { "type": "string", "description": "Optional team id" },
                 "role": { "type": "string", "description": "Optional role" },
-                "skills": { "type": "array", "items": { "type": "string" }, "description": "Optional skills allowlist" }
+                "skills": { "type": "array", "items": { "type": "string" }, "description": "Optional skills allowlist" },
+                "identity_md": { "type": "string", "description": "Optional explicit IDENTITY.md content for the new entity" },
+                "soul_md": { "type": "string", "description": "Optional explicit SOUL.md content for the new entity" },
+                "agents_md": { "type": "string", "description": "Optional explicit AGENTS.md content for the new entity" }
             },
             "required": ["id"],
             "additionalProperties": false
@@ -239,14 +248,22 @@ impl Tool for CreateEntityTool {
         )
         .await
         .with_context(|| format!("scaffold entity workspace for {}", id))?;
+        if let Some(identity_md) = args.identity_md.as_deref() {
+            fs::write(entity_dir.join("IDENTITY.md"), identity_md).await?;
+        }
+        if let Some(soul_md) = args.soul_md.as_deref() {
+            fs::write(entity_dir.join("SOUL.md"), soul_md).await?;
+        }
+        if let Some(agents_md) = args.agents_md.as_deref() {
+            fs::write(entity_dir.join("AGENTS.md"), agents_md).await?;
+        }
 
         match pool.create_entity(entity_config, self.agent_max) {
             Ok(runtime) => Ok(ToolResult {
                 success: true,
                 output: format!(
-                    "entity '{}' created, persisted to config, workspace at {}. You must now write or update this entity's IDENTITY.md and AGENTS.md with detailed identity, responsibilities, skills/tools, and workflow (50–200 words each); use file_write to the paths under {}.",
+                    "entity '{}' created, persisted to config, workspace at {}.",
                     runtime.id,
-                    entity_dir.display(),
                     entity_dir.display()
                 ),
                 error: None,
@@ -545,5 +562,57 @@ enabled = true
         let r2 = tool.execute(json!({ "id": "b" })).await.unwrap();
         assert!(!r2.success, "second create should hit agent_max limit");
         assert!(r2.error.unwrap_or_default().contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn create_entity_writes_inline_persona_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        let workspace_dir = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        let config_toml = r#"
+default_provider = "openrouter"
+default_model = "gpt-4"
+default_temperature = 0.7
+[instance]
+preset = "startup"
+[instance.ceo]
+enabled = true
+"#;
+        std::fs::write(&config_path, config_toml).unwrap();
+        let pool = EntityPool::from_config(&Config {
+            instance: Some(crate::config::InstanceConfig {
+                preset: Some("startup".to_string()),
+                default_provider: None,
+                default_model: None,
+                ceo: Some(crate::config::CeoConfig {
+                    enabled: Some(true),
+                }),
+                entities: vec![],
+                teams: vec![],
+                projects: vec![],
+            }),
+            ..Config::default()
+        })
+        .unwrap();
+        let tool = CreateEntityTool::new(Some(pool), Some(10), config_path, workspace_dir.clone());
+        let r = tool
+            .execute(json!({
+                "id": "product_manager",
+                "role": "商业产品经理",
+                "identity_md": "# IDENTITY.md\n自定义身份",
+                "soul_md": "# SOUL.md\n自定义灵魂",
+                "agents_md": "# AGENTS.md\n自定义规范"
+            }))
+            .await
+            .unwrap();
+        assert!(r.success, "{:?}", r.error);
+        let entity_dir = workspace_dir.join("entities").join("product_manager");
+        let identity = std::fs::read_to_string(entity_dir.join("IDENTITY.md")).unwrap();
+        let soul = std::fs::read_to_string(entity_dir.join("SOUL.md")).unwrap();
+        let agents = std::fs::read_to_string(entity_dir.join("AGENTS.md")).unwrap();
+        assert!(identity.contains("自定义身份"));
+        assert!(soul.contains("自定义灵魂"));
+        assert!(agents.contains("自定义规范"));
     }
 }

@@ -3,6 +3,7 @@
 //! Used by admin to create/list/delete instances. Port pool starts at 42618
 //! (admin uses 42617). Also provides ensure_admin_instance for first-time cluster setup.
 
+use crate::config::Config;
 use crate::instance_registry::{InstanceEntry, InstanceRegistry, InstanceRole, InstanceStatus};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -42,7 +43,11 @@ pub async fn ensure_admin_instance(cluster_root: &Path) -> Result<(PathBuf, Path
     let mut reg = InstanceRegistry::load(cluster_root).await?;
     if reg.get(ADMIN_INSTANCE_ID).is_some() {
         let admin_dir = cluster_root.join(INSTANCES_DIR).join(ADMIN_INSTANCE_ID);
-        return Ok((admin_dir.join("workspace"), admin_dir.join("config.toml")));
+        let admin_workspace = admin_dir.join("workspace");
+        crate::entity::scaffold_admin_workspace(&admin_workspace)
+            .await
+            .with_context(|| "Failed to refresh admin (董事长) workspace assets")?;
+        return Ok((admin_workspace, admin_dir.join("config.toml")));
     }
 
     let admin_dir = cluster_root.join(INSTANCES_DIR).join(ADMIN_INSTANCE_ID);
@@ -117,6 +122,42 @@ preset = "{preset_val}"
     }
 }
 
+async fn resolve_default_provider_model(cluster_root: &Path) -> (Option<String>, Option<String>) {
+    let mut provider = None;
+    let mut model = None;
+
+    let admin_cfg = cluster_root
+        .join(INSTANCES_DIR)
+        .join(ADMIN_INSTANCE_ID)
+        .join("config.toml");
+    if let Ok(cfg) = Config::load_from_path(&admin_cfg).await {
+        provider = cfg.default_provider.clone();
+        model = cfg.default_model.clone();
+    }
+
+    if provider.is_none() || model.is_none() {
+        let root_cfg = cluster_root.join("config.toml");
+        if let Ok(cfg) = Config::load_from_path(&root_cfg).await {
+            if provider.is_none() {
+                provider = cfg.default_provider.clone();
+            }
+            if model.is_none() {
+                model = cfg.default_model.clone();
+            }
+        }
+    }
+
+    let defaults = Config::default();
+    if provider.is_none() {
+        provider = defaults.default_provider;
+    }
+    if model.is_none() {
+        model = defaults.default_model;
+    }
+
+    (provider, model)
+}
+
 /// Allocate the next available port >= PORT_POOL_START from the registry.
 fn allocate_port(reg: &InstanceRegistry) -> u16 {
     let used: std::collections::HashSet<u16> = reg.allocated_ports().collect();
@@ -161,6 +202,19 @@ pub async fn instance_create(
     fs::write(&config_path, minimal_instance_config(port, preset))
         .await
         .with_context(|| format!("Failed to write instance config: {}", config_path.display()))?;
+
+    // Ensure every newly created instance can start a conversation immediately.
+    let mut cfg = Config::load_from_path(&config_path).await?;
+    if cfg.default_provider.is_none() || cfg.default_model.is_none() {
+        let (provider, model) = resolve_default_provider_model(cluster_root).await;
+        if cfg.default_provider.is_none() {
+            cfg.default_provider = provider;
+        }
+        if cfg.default_model.is_none() {
+            cfg.default_model = model;
+        }
+        cfg.save().await?;
+    }
 
     crate::entity::scaffold_instance_workspace(&workspace_dir, id_clean)
         .await

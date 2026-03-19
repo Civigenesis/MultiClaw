@@ -81,7 +81,45 @@ pub async fn scaffold_entity_workspace(
             tokio::fs::write(&path, content).await?;
         }
     }
+    if is_ceo {
+        scaffold_ceo_skill_assets(&entity_dir).await?;
+    }
 
+    Ok(())
+}
+
+async fn scaffold_ceo_skill_assets(entity_dir: &Path) -> Result<()> {
+    const CEO_SKILL_FILES: &[(&str, &str)] = &[
+        (
+            "skills/ceo_entity_designer/SKILL.md",
+            include_str!("../../assets/skills/ceo_entity_designer/SKILL.md"),
+        ),
+        (
+            "skills/ceo_entity_designer/entity_identity_template.md",
+            include_str!("../../assets/skills/ceo_entity_designer/entity_identity_template.md"),
+        ),
+        (
+            "skills/ceo_entity_designer/entity_soul_template.md",
+            include_str!("../../assets/skills/ceo_entity_designer/entity_soul_template.md"),
+        ),
+        (
+            "skills/ceo_entity_designer/entity_agents_template.md",
+            include_str!("../../assets/skills/ceo_entity_designer/entity_agents_template.md"),
+        ),
+        (
+            "skills/ceo_entity_designer/team_template.md",
+            include_str!("../../assets/skills/ceo_entity_designer/team_template.md"),
+        ),
+    ];
+    for (relative_path, content) in CEO_SKILL_FILES {
+        let path = entity_dir.join(relative_path);
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::write(&path, content).await?;
+        }
+    }
     Ok(())
 }
 
@@ -124,12 +162,19 @@ fn detailed_ceo_agents(display_name: &str) -> String {
 
 ## 每会话必做
 1. 阅读 SOUL.md、IDENTITY.md，确认自己是本实例的 CEO。
-2. 使用 instance_status 查看当前实体列表与状态。
-3. 使用 memory_recall 回顾近期决策与任务进展。
+2. 读取 `skills/ceo_entity_designer/SKILL.md`，并按该 skill 执行创建团队/实体相关流程。
+3. 使用 instance_status 查看当前实体列表与状态。
+4. 使用 memory_recall 回顾近期决策与任务进展。
 
-## 创建团队与成员时
+## 意图归一（强约束）
+- 用户表达“角色/岗位/员工/成员/招人” -> 统一视为创建实体意图。
+- 用户表达“团队/小组/部门” -> 统一视为创建团队意图。
+- 若语义有歧义，先澄清“你是要创建实体/团队，还是做分析？”再执行。
+
+## 创建团队与成员（强约束）
 - **create_team**：给出团队 id 与可选 name，创建后可在 workspace/teams/<id>/ 下放共享说明。
-- **create_entity**：必须明确该实体的**职责与工作流程**。创建完成后，用 file_write 为该实体撰写或完善 workspace/entities/<id>/IDENTITY.md 与 AGENTS.md（建议 50–200 字），包含：身份、职责、可用的技能/工具、日常工作流程。不要只留一句描述。
+- **create_entity**：优先单次调用并直接传入 `identity_md`/`soul_md`/`agents_md`，避免创建后多轮 file_write 补文案。
+- 若团队不存在，先 create_team 再 create_entity；创建后只做必要补充，不重复写无效路径。
 
 ## 任务分配与跟进
 - 用 assign_task 指定 entity_id 与 task 描述；当前为占位，后续通过 MessageBus 投递。
@@ -138,6 +183,7 @@ fn detailed_ceo_agents(display_name: &str) -> String {
 ## 决策原则
 - 先看 instance_status 再决定是否增人、建队。
 - 每新增实体，必配清晰的身份与职责文档，便于其独立决策与协作。
+- file_write 必须使用 workspace 相对路径；禁止绝对路径。
 
 ---
 *可根据实例类型（startup/enterprise 等）在此补充更多规范。*
@@ -217,6 +263,50 @@ fn detailed_entity_agents(display_name: &str, _entity_id: &str, role: Option<&st
 /// companies (instances), view global state, and send messages to CEO instances.
 /// Only creates files that do not already exist (idempotent).
 pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
+    const ADMIN_SKILL_FILES: &[(&str, &str)] = &[
+        (
+            "skills/admin_company_designer/SKILL.md",
+            include_str!("../../assets/skills/admin_company_designer/SKILL.md"),
+        ),
+        (
+            "skills/admin_company_designer/entity_identity_template.md",
+            include_str!("../../assets/skills/admin_company_designer/entity_identity_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/entity_soul_template.md",
+            include_str!("../../assets/skills/admin_company_designer/entity_soul_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/entity_agents_template.md",
+            include_str!("../../assets/skills/admin_company_designer/entity_agents_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/ceo_identity_template.md",
+            include_str!("../../assets/skills/admin_company_designer/ceo_identity_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/ceo_soul_template.md",
+            include_str!("../../assets/skills/admin_company_designer/ceo_soul_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/ceo_agents_template.md",
+            include_str!("../../assets/skills/admin_company_designer/ceo_agents_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/instance_identity_template.md",
+            include_str!(
+                "../../assets/skills/admin_company_designer/instance_identity_template.md"
+            ),
+        ),
+        (
+            "skills/admin_company_designer/instance_soul_template.md",
+            include_str!("../../assets/skills/admin_company_designer/instance_soul_template.md"),
+        ),
+        (
+            "skills/admin_company_designer/instance_agents_template.md",
+            include_str!("../../assets/skills/admin_company_designer/instance_agents_template.md"),
+        ),
+    ];
     const ADMIN_IDENTITY: &str = r#"# IDENTITY.md — 集群董事长（Admin）身份与职责
 
 ## 身份
@@ -227,7 +317,8 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 
 ### 1) 实例管理（集群层）
 - **创建/管理实例（公司）**（强约束）：
-  - 公司/实例创建必须使用工具 `create_company`，并严格遵循 `draft -> confirm -> apply` 三步流程落盘。
+  - 公司/实例创建必须使用工具 `create_company`，且在用户确认后通过 `action=apply` 一次调用完成落盘。
+  - 在生成公司草案前，必须先读取 `skills/admin_company_designer/SKILL.md` 与模板文件，严格按该 skill 结构生成公司、CEO、实体三层内容。
   - 公司创建流程中禁止：通过 `shell` 执行 `multiclaw instance create`、`multiclaw instance list/status`，或自动读取 `instances.json` 做“先执行再查看”的调试。
   - 仅在 `create_company` 明确失败且用户允许你进行“手动检查”时，才给出建议（不自动执行）。
 - **定时检查实例状态**：仅在你被要求“巡检/查看状态”时进行；在公司创建流程里不把巡检当作默认动作。
@@ -250,6 +341,7 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 
 ## 你的工作重心
 - **实例管理**：创建与管理实例；定期巡检所有实例状态。
+- **创建标准化**：创建公司前必须引用 `skills/admin_company_designer/` 模板生成结构化草案，确保每个实体职责与流程可执行。
 - **业务中枢**：把用户信息准确投递到目标实例 CEO；汇总 CEO 结果并定期向用户汇报。
 - **审批中枢**：对额度分配与审批工单进行治理；任何不确定/高风险事项都要及时升级给用户决策。
 
@@ -270,17 +362,18 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 ### A) 实例管理（含公司创建：强约束）
 - **创建公司（必须走标准流程）**：当用户提出创建公司/实例时，admin 必须执行：
   1. 需求澄清（不调用 create_company）：向用户提问以确定公司目标、范围/边界、期望风格、资源约束（映射到 `agent_max`）、初始岗位建议。
-  2. 生成草案（不调用 create_company）：输出
+  2. 加载 skill（不调用 create_company）：读取 `skills/admin_company_designer/SKILL.md` 及模板。
+  3. 生成草案（不调用 create_company，且必须遵循 skill 模板）：输出
      - 公司说明（实例层 persona 要点）
      - CEO 说明（CEO persona 要点与职责边界）
      - 团队/岗位分工（entities[]：id/role/team_id/技能约束）
+     - 每个实体的 identity_md/soul_md/agents_md（职责、工具、流程必须差异化，不得只改名称）
      - 资源配置草案（agent_max + 理由）
-  3. 用户确认（必须）：要求用户回复 `确认` 或 `修改：...`。
-  4. 工具落盘（收到确认后才允许调用）：
-     - `create_company` action=`draft`（带入上面的草案内容）
-     - `create_company` action=`confirm`
-     - `create_company` action=`apply`
-  5. 成功汇报 / 失败处理：
+  4. 用户确认（必须）：要求用户回复 `确认` 或 `修改：...`。
+  5. 工具落盘（收到确认后才允许调用）：
+     - 单次调用 `create_company` action=`apply`，并携带 instance/ceo/entities 的完整草案字段。
+     - `entities[]` 只允许员工实体；CEO 只能通过 `ceo_identity_md` / `ceo_soul_md` / `ceo_agents_md` 传递。
+  6. 成功汇报 / 失败处理：
      - 成功：汇报端口、workspace 路径、已创建的实体列表
      - 失败：只复述 `create_company` 错误并请求你是否允许“手动检查”（仍不自动 shell 探测）
 - **状态巡检**：仅在用户明确要求“查看状态/巡检”时执行；公司创建流程中禁止用 shell 自助调试（避免超出工具调用次数）。
@@ -313,6 +406,16 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
     ] {
         let path = workspace_dir.join(filename);
         if !path.exists() {
+            tokio::fs::write(&path, content).await?;
+        }
+    }
+
+    for (relative_path, content) in ADMIN_SKILL_FILES {
+        let path = workspace_dir.join(relative_path);
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
             tokio::fs::write(&path, content).await?;
         }
     }
@@ -673,6 +776,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scaffold_ceo_workspace_creates_ceo_skill_assets() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let workspace = tmp.path();
+        scaffold_entity_workspace(workspace, CEO_ENTITY_ID, Some("CEO"))
+            .await
+            .unwrap();
+        let ceo_skill = workspace
+            .join("entities")
+            .join(CEO_ENTITY_ID)
+            .join("skills")
+            .join("ceo_entity_designer")
+            .join("SKILL.md");
+        assert!(ceo_skill.exists(), "CEO skill should be scaffolded");
+    }
+
+    #[tokio::test]
     async fn scaffold_admin_workspace_creates_chairman_identity_soul_agents() {
         let tmp = tempfile::TempDir::new().unwrap();
         scaffold_admin_workspace(tmp.path()).await.unwrap();
@@ -680,7 +799,8 @@ mod tests {
         let identity = std::fs::read_to_string(tmp.path().join("IDENTITY.md")).unwrap();
         assert!(identity.contains("董事长") && identity.contains("Admin"));
         assert!(identity.contains("create_company"));
-        assert!(identity.contains("draft -> confirm -> apply"));
+        assert!(identity.contains("action=apply"));
+        assert!(identity.contains("admin_company_designer"));
         assert!(identity.contains("admin-message"));
 
         let soul = std::fs::read_to_string(tmp.path().join("SOUL.md")).unwrap();
@@ -689,6 +809,12 @@ mod tests {
         let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert!(agents.contains("董事长"));
         assert!(agents.contains("create_company"));
-        assert!(agents.contains("action=`draft`") || agents.contains("action=\"draft\""));
+        assert!(agents.contains("action=`apply`") || agents.contains("action=\"apply\""));
+        assert!(tmp
+            .path()
+            .join("skills")
+            .join("admin_company_designer")
+            .join("SKILL.md")
+            .exists());
     }
 }

@@ -1,9 +1,4 @@
-//! Admin tool: create_company (draft/confirm/apply) for cluster instance creation.
-//!
-//! This tool is intended to make "create a company" a productized workflow:
-//! 1) draft: persist a creation draft (company/CEO/entity descriptions + constraints)
-//! 2) confirm: mark the draft confirmed by the operator
-//! 3) apply: create the instance and write the detailed workspace files
+//! Admin tool: create_company (single-step apply) for cluster instance creation.
 
 use super::traits::{Tool, ToolResult};
 use crate::config::{Config, EntityConfig, InstanceConfig};
@@ -32,8 +27,6 @@ impl CreateCompanyTool {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum CreateCompanyAction {
-    Draft,
-    Confirm,
     Apply,
 }
 
@@ -144,6 +137,161 @@ impl CompanyDraftFile {
     }
 }
 
+fn has_inline_apply_payload(args: &CreateCompanyArgs) -> bool {
+    args.preset.is_some()
+        || args.business_domain.is_some()
+        || args.agent_max.is_some()
+        || args.instance_identity_md.is_some()
+        || args.instance_soul_md.is_some()
+        || args.instance_agents_md.is_some()
+        || args.ceo_identity_md.is_some()
+        || args.ceo_soul_md.is_some()
+        || args.ceo_agents_md.is_some()
+        || !args.entities.is_empty()
+}
+
+async fn resolve_default_provider_model(cluster_root: &Path) -> (Option<String>, Option<String>) {
+    let mut provider = None;
+    let mut model = None;
+
+    // Prefer admin instance defaults.
+    let admin_cfg = cluster_root
+        .join("instances")
+        .join(instance_manager::ADMIN_INSTANCE_ID)
+        .join("config.toml");
+    if let Ok(cfg) = Config::load_from_path(&admin_cfg).await {
+        provider = cfg.default_provider.clone();
+        model = cfg.default_model.clone();
+    }
+
+    // Fallback to root config defaults.
+    if provider.is_none() || model.is_none() {
+        let root_cfg = cluster_root.join("config.toml");
+        if let Ok(cfg) = Config::load_from_path(&root_cfg).await {
+            if provider.is_none() {
+                provider = cfg.default_provider.clone();
+            }
+            if model.is_none() {
+                model = cfg.default_model.clone();
+            }
+        }
+    }
+
+    // Final fallback to built-in defaults.
+    let defaults = Config::default();
+    if provider.is_none() {
+        provider = defaults.default_provider;
+    }
+    if model.is_none() {
+        model = defaults.default_model;
+    }
+
+    (provider, model)
+}
+
+fn is_ceo_entity_id(id: &str) -> bool {
+    let lower = id.trim().to_ascii_lowercase();
+    lower == crate::entity::CEO_ENTITY_ID || lower.starts_with("ceo_")
+}
+
+fn is_ceo_candidate(ed: &EntityDraft) -> bool {
+    if is_ceo_entity_id(&ed.id) {
+        return true;
+    }
+    ed.role
+        .as_deref()
+        .map(|r| r.to_ascii_lowercase().contains("ceo"))
+        .unwrap_or(false)
+}
+
+fn role_based_default_skills(role: Option<&str>) -> Option<Vec<String>> {
+    let role = role.unwrap_or("").to_ascii_lowercase();
+    if role.contains("增长") || role.contains("growth") {
+        return Some(vec![
+            "memory_recall".into(),
+            "memory_store".into(),
+            "file_read".into(),
+            "file_write".into(),
+            "web_search_tool".into(),
+            "content_search".into(),
+        ]);
+    }
+    if role.contains("设计") || role.contains("design") {
+        return Some(vec![
+            "file_read".into(),
+            "file_write".into(),
+            "file_edit".into(),
+            "image_info".into(),
+            "memory_recall".into(),
+            "memory_store".into(),
+        ]);
+    }
+    if role.contains("内容") || role.contains("content") {
+        return Some(vec![
+            "file_read".into(),
+            "file_write".into(),
+            "file_edit".into(),
+            "memory_recall".into(),
+            "memory_store".into(),
+            "web_search_tool".into(),
+        ]);
+    }
+    if role.contains("运营") || role.contains("ops") {
+        return Some(vec![
+            "memory_recall".into(),
+            "memory_store".into(),
+            "file_read".into(),
+            "file_write".into(),
+            "schedule".into(),
+        ]);
+    }
+    None
+}
+
+fn fallback_entity_identity(company_id: &str, ed: &EntityDraft) -> String {
+    let role = ed.role.as_deref().unwrap_or("成员");
+    let team = ed.team_id.as_deref().unwrap_or("未分配团队");
+    format!(
+        "# IDENTITY.md — {id}（{role}）\n\n## 身份\n- 所属实例：{company_id}\n- 实体 ID：{id}\n- 角色：{role}\n- 团队：{team}\n\n## 核心职责\n1. 围绕 {role} 目标执行可交付工作，不越权替代 CEO 决策。\n2. 对外输出需结构化、可复用，并标注产出路径。\n3. 与其他实体协作时明确输入、输出、截止时间。\n",
+        company_id = company_id,
+        id = ed.id,
+        role = role,
+        team = team
+    )
+}
+
+fn fallback_entity_soul(company_id: &str, ed: &EntityDraft) -> String {
+    let role = ed.role.as_deref().unwrap_or("成员");
+    format!(
+        "# SOUL.md — {id}\n\n你是实例 {company_id} 的 {role}。每次会话先确认任务边界，再产出可交付结果；当需求不清晰时先提问澄清，不靠猜测推进。\n",
+        id = ed.id,
+        company_id = company_id,
+        role = role
+    )
+}
+
+fn fallback_entity_agents(_company_id: &str, ed: &EntityDraft) -> String {
+    let role = ed.role.as_deref().unwrap_or("成员");
+    let skills = ed
+        .skills
+        .clone()
+        .or_else(|| role_based_default_skills(ed.role.as_deref()))
+        .unwrap_or_else(|| {
+            vec![
+                "file_read".into(),
+                "file_write".into(),
+                "memory_recall".into(),
+            ]
+        });
+    let skills_text = skills.join(", ");
+    format!(
+        "# AGENTS.md — {id} 工作规范\n\n## 每会话必做\n1. 阅读 IDENTITY.md/SOUL.md，确认当前角色目标（{role}）。\n2. 使用 memory_recall 检索最近任务上下文。\n3. 产出完成后记录结果与路径。\n\n## 推荐工具\n- {skills_text}\n\n## 协作边界\n- 向 CEO 汇报进展与阻塞；不擅自修改其它实体职责。\n- 与跨团队协作时，先给出输入/输出契约再执行。\n\n## 产出要求\n- 输出应可审计：结论、依据、文件路径、下一步建议。\n- 关键决策写入 memory，便于后续接力。\n",
+        id = ed.id,
+        role = role,
+        skills_text = skills_text,
+    )
+}
+
 fn default_entities_for(preset: Option<&str>, business_domain: Option<&str>) -> Vec<EntityDraft> {
     let preset = preset.unwrap_or("").to_ascii_lowercase();
     let domain = business_domain.unwrap_or("").to_string();
@@ -245,15 +393,6 @@ fn draft_path_for(cluster_root: &Path, company_id: &str) -> PathBuf {
     admin_drafts_dir(cluster_root).join(format!("{company_id}.json"))
 }
 
-async fn load_draft(path: &Path) -> Result<CompanyDraftFile> {
-    let contents = fs::read_to_string(path)
-        .await
-        .with_context(|| format!("Failed to read draft {}", path.display()))?;
-    let parsed: CompanyDraftFile = serde_json::from_str(&contents)
-        .with_context(|| format!("Failed to parse draft {}", path.display()))?;
-    Ok(parsed)
-}
-
 async fn save_draft(path: &Path, draft: &CompanyDraftFile) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
@@ -321,6 +460,15 @@ async fn apply_to_instance(
 
     // Ensure [instance] + ceo enabled + entities persisted (so CEO tools see them).
     let mut cfg = Config::load_from_path(&config_path).await?;
+    if cfg.default_provider.is_none() || cfg.default_model.is_none() {
+        let (provider, model) = resolve_default_provider_model(cluster_root).await;
+        if cfg.default_provider.is_none() {
+            cfg.default_provider = provider;
+        }
+        if cfg.default_model.is_none() {
+            cfg.default_model = model;
+        }
+    }
     let inst: &mut InstanceConfig = cfg.instance.get_or_insert_with(Default::default);
     inst.preset = draft
         .preset
@@ -336,10 +484,10 @@ async fn apply_to_instance(
         }
     }
 
-    // Merge entities (skip duplicates)
+    // Merge entities (skip duplicates and any CEO-like ids).
     for ed in &draft.entities {
         let id = ed.id.trim();
-        if id.is_empty() || id.eq_ignore_ascii_case(crate::entity::CEO_ENTITY_ID) {
+        if id.is_empty() || is_ceo_candidate(ed) {
             continue;
         }
         if inst.entities.iter().any(|e| e.id == id) {
@@ -351,7 +499,10 @@ async fn apply_to_instance(
             model: ed.model.clone(),
             team_id: ed.team_id.clone(),
             role: ed.role.clone(),
-            skills: ed.skills.clone(),
+            skills: ed
+                .skills
+                .clone()
+                .or_else(|| role_based_default_skills(ed.role.as_deref())),
         });
     }
     cfg.save().await?;
@@ -370,6 +521,13 @@ async fn apply_to_instance(
     // Ensure CEO workspace and write CEO persona.
     let ceo_dir = crate::entity::entity_workspace_dir(&workspace_dir, crate::entity::CEO_ENTITY_ID);
     ensure_entity_subdirs(&ceo_dir).await?;
+    crate::entity::scaffold_entity_workspace(
+        &workspace_dir,
+        crate::entity::CEO_ENTITY_ID,
+        Some("CEO"),
+    )
+    .await
+    .with_context(|| "scaffold ceo workspace during create_company apply")?;
     if let Some(ref md) = draft.ceo_identity_md {
         write_text(&ceo_dir.join("IDENTITY.md"), md).await?;
     }
@@ -383,27 +541,26 @@ async fn apply_to_instance(
     // Scaffold entities workspaces and persona files.
     for ed in &draft.entities {
         let id = ed.id.trim();
-        if id.is_empty() || id.eq_ignore_ascii_case(crate::entity::CEO_ENTITY_ID) {
+        if id.is_empty() || is_ceo_candidate(ed) {
             continue;
         }
         let entity_dir = crate::entity::entity_workspace_dir(&workspace_dir, id);
         ensure_entity_subdirs(&entity_dir).await?;
-        if let Some(ref md) = ed.identity_md {
-            write_text(&entity_dir.join("IDENTITY.md"), md).await?;
-        }
-        if let Some(ref md) = ed.soul_md {
-            write_text(&entity_dir.join("SOUL.md"), md).await?;
-        }
-        if let Some(ref md) = ed.agents_md {
-            write_text(&entity_dir.join("AGENTS.md"), md).await?;
-        }
-        // If no explicit persona provided, keep the default scaffold (created by create_entity later)
-        // or generate minimal persona now.
-        if !entity_dir.join("IDENTITY.md").exists() || !entity_dir.join("AGENTS.md").exists() {
-            let _ =
-                crate::entity::scaffold_entity_workspace(&workspace_dir, id, ed.role.as_deref())
-                    .await;
-        }
+        let identity = ed
+            .identity_md
+            .clone()
+            .unwrap_or_else(|| fallback_entity_identity(company_id, ed));
+        let soul = ed
+            .soul_md
+            .clone()
+            .unwrap_or_else(|| fallback_entity_soul(company_id, ed));
+        let agents = ed
+            .agents_md
+            .clone()
+            .unwrap_or_else(|| fallback_entity_agents(company_id, ed));
+        write_text(&entity_dir.join("IDENTITY.md"), &identity).await?;
+        write_text(&entity_dir.join("SOUL.md"), &soul).await?;
+        write_text(&entity_dir.join("AGENTS.md"), &agents).await?;
     }
 
     Ok((entry.gateway_port.unwrap_or(0), workspace_dir))
@@ -416,14 +573,14 @@ impl Tool for CreateCompanyTool {
     }
 
     fn description(&self) -> &str {
-        "Create a company (cluster instance) using a strict workflow: draft -> confirm -> apply. Admin-only. Draft persists detailed company/CEO/entity descriptions and constraints; apply creates the instance, writes persona files, and sets constraints like agent_max."
+        "Create a company (cluster instance) in a single apply call. Admin-only. Expects full payload after user confirmation and writes instance/CEO/entity persona files plus constraints like agent_max."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "action": { "type": "string", "enum": ["draft", "confirm", "apply"] },
+                "action": { "type": "string", "enum": ["apply"] },
                 "company_id": { "type": "string", "description": "Instance id (directory name) under cluster_root/instances/<id>." },
                 "preset": { "type": "string", "description": "Optional instance preset (startup/enterprise/brainstorm/freeform/project/...)." },
                 "business_domain": { "type": "string", "description": "Optional business domain hint (e.g. 新媒体运营). When entities are omitted, preset role packs may be auto-filled." },
@@ -472,56 +629,27 @@ impl Tool for CreateCompanyTool {
             .map_err(|e| anyhow::anyhow!("invalid create_company arguments: {e}"))?;
         let company_id = sanitize_company_id(&args.company_id)?;
         let cluster_root = cluster_root_from_config_path(&self.config_path)?;
+        let admin_workspace = cluster_root
+            .join("instances")
+            .join(instance_manager::ADMIN_INSTANCE_ID)
+            .join("workspace");
+        // Ensure admin skill templates exist in-place before create workflow.
+        let _ = crate::entity::scaffold_admin_workspace(&admin_workspace).await;
         let draft_path = draft_path_for(&cluster_root, &company_id);
 
         match args.action {
-            CreateCompanyAction::Draft => {
-                let draft = CompanyDraftFile::from_args(&args);
-                save_draft(&draft_path, &draft).await?;
-                Ok(ToolResult {
-                    success: true,
-                    output: format!(
-                        "Draft created for company '{}' at {}. Next: call create_company with action=confirm, then action=apply.",
-                        company_id,
-                        draft_path.display()
-                    ),
-                    error: None,
-                })
-            }
-            CreateCompanyAction::Confirm => {
-                if !draft_path.exists() {
+            CreateCompanyAction::Apply => {
+                if !has_inline_apply_payload(&args) {
                     bail!(
-                        "Draft not found for company '{}'. Create it first with action=draft.",
-                        company_id
+                        "create_company now supports single-step apply only. \
+Provide full company payload (instance/ceo/entities/resource fields) in action=apply."
                     );
                 }
-                let mut draft = load_draft(&draft_path).await?;
+                let mut draft = CompanyDraftFile::from_args(&args);
                 draft.confirmed = true;
                 draft.confirmed_at = Some(chrono::Utc::now().to_rfc3339());
+                // Keep an auditable snapshot for each apply.
                 save_draft(&draft_path, &draft).await?;
-                Ok(ToolResult {
-                    success: true,
-                    output: format!(
-                        "Draft confirmed for company '{}'. Next: call create_company with action=apply.",
-                        company_id
-                    ),
-                    error: None,
-                })
-            }
-            CreateCompanyAction::Apply => {
-                if !draft_path.exists() {
-                    bail!(
-                        "Draft not found for company '{}'. Create it first with action=draft.",
-                        company_id
-                    );
-                }
-                let draft = load_draft(&draft_path).await?;
-                if !draft.confirmed {
-                    bail!(
-                        "Draft for company '{}' is not confirmed yet. Call action=confirm first.",
-                        company_id
-                    );
-                }
                 let (port, workspace_dir) =
                     apply_to_instance(&cluster_root, &company_id, &draft).await?;
                 Ok(ToolResult {
@@ -547,15 +675,15 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn create_company_draft_confirm_apply_roundtrip() {
+    async fn create_company_apply_single_step_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
         let (_ws, admin_cfg) = ensure_admin_instance(root).await.unwrap();
         let tool = CreateCompanyTool::new(admin_cfg.clone());
 
-        let draft_args = json!({
-            "action": "draft",
+        let apply_args = json!({
+            "action": "apply",
             "company_id": "newmedia",
             "preset": "startup",
             "agent_max": 10,
@@ -563,20 +691,8 @@ mod tests {
             "ceo_identity_md": "# CEO\n",
             "entities": [{"id":"ops","role":"运营"}]
         });
-        let r1 = tool.execute(draft_args).await.unwrap();
-        assert!(r1.success, "{:?}", r1.error);
-
-        let r2 = tool
-            .execute(json!({"action":"confirm","company_id":"newmedia"}))
-            .await
-            .unwrap();
-        assert!(r2.success, "{:?}", r2.error);
-
-        let r3 = tool
-            .execute(json!({"action":"apply","company_id":"newmedia"}))
-            .await
-            .unwrap();
-        assert!(r3.success, "{:?}", r3.error);
+        let r = tool.execute(apply_args).await.unwrap();
+        assert!(r.success, "{:?}", r.error);
 
         // Verify instance directory exists
         assert!(root
@@ -594,5 +710,68 @@ mod tests {
         let reg = InstanceRegistry::load(root).await.unwrap();
         let e = reg.get("newmedia").unwrap();
         assert_eq!(e.constraints.as_ref().and_then(|c| c.agent_max), Some(10));
+    }
+
+    #[tokio::test]
+    async fn create_company_apply_with_inline_payload_single_call() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let (_ws, admin_cfg) = ensure_admin_instance(root).await.unwrap();
+        let tool = CreateCompanyTool::new(admin_cfg.clone());
+
+        let r = tool
+            .execute(json!({
+                "action": "apply",
+                "company_id": "assistant",
+                "preset": "startup",
+                "agent_max": 6,
+                "instance_identity_md": "# IDENTITY\nassistant",
+                "ceo_identity_md": "# CEO\nassistant-ceo",
+                "entities": [
+                    {"id":"ceo_01","role":"CEO"},
+                    {"id":"ops","role":"运营"}
+                ]
+            }))
+            .await
+            .unwrap();
+        assert!(r.success, "{:?}", r.error);
+
+        let assistant = root.join("instances").join("assistant").join("workspace");
+        assert!(assistant.join("entities").join("ceo").exists());
+        assert!(assistant
+            .join("entities")
+            .join("ceo")
+            .join("skills")
+            .join("ceo_entity_designer")
+            .join("SKILL.md")
+            .exists());
+        assert!(!assistant.join("entities").join("ceo_01").exists());
+        assert!(assistant
+            .join("entities")
+            .join("ops")
+            .join("IDENTITY.md")
+            .exists());
+
+        let cfg =
+            std::fs::read_to_string(root.join("instances").join("assistant").join("config.toml"))
+                .unwrap();
+        assert!(cfg.contains("[[instance.entities]]"));
+        assert!(cfg.contains("id = \"ops\""));
+        assert!(!cfg.contains("id = \"ceo_01\""));
+        assert!(cfg.contains("default_provider"));
+        assert!(cfg.contains("default_model"));
+    }
+
+    #[tokio::test]
+    async fn create_company_apply_requires_full_payload() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let (_ws, admin_cfg) = ensure_admin_instance(root).await.unwrap();
+        let tool = CreateCompanyTool::new(admin_cfg);
+        let res = tool
+            .execute(json!({"action":"apply","company_id":"missing_payload_only"}))
+            .await;
+        assert!(res.is_err());
     }
 }
