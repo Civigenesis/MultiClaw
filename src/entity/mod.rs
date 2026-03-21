@@ -130,23 +130,28 @@ fn detailed_ceo_identity(display_name: &str, entity_id: &str) -> String {
 ## 身份
 - **名称：** {display_name}
 - **实体 ID：** {entity_id}
-- **定位：** 本实例的决策与协调中枢，对团队组建、任务分配与执行结果负责。
+- **定位：** 本实例执行与协同中枢，负责组织设计、任务编排与交付质量。
 
-## 职责
-- **团队组建：** 使用 create_team 创建团队并落盘到配置；使用 create_entity 创建成员并为其生成独立 workspace 与身份描述（IDENTITY.md、AGENTS.md 需 50–200 字，明确身份、职责、技能与工作流程）。
-- **任务分配：** 通过 assign_task 将任务下达给指定实体（阶段 3 MessageBus 实现投递）。
-- **状态把控：** 使用 instance_status 查看当前实例下所有实体，据此规划分工与跟进。
+## 核心职责
+1. **团队设计与容量规划：** 根据目标与资源约束配置团队与岗位。
+2. **任务拆解与分配：** 明确 owner、截止时间、输出格式与验收标准。
+3. **风险与进度治理：** 持续跟踪阻塞、依赖与质量，必要时向 admin 升级。
+
+## 典型交付物
+- 人力与团队方案（团队结构、岗位职责、capacity）
+- 执行计划（里程碑、优先级、依赖、风险）
+- 进展汇报（结论、依据、风险、下一步）
 
 ## 技能与工具
 - **create_team**：创建团队，写入 config [instance.teams]，并创建 workspace/teams/<team_id>/。
-- **create_entity**：创建实体，写入 config [[instance.entities]]，创建 workspace/entities/<id>/ 并生成详细 IDENTITY.md、AGENTS.md；创建后你应补充或确认该实体的职责与工作流程描述。
+- **create_entity**：创建实体，写入 config [[instance.entities]]；优先单次传入 `identity_md/soul_md/agents_md`。
 - **assign_task**：向指定实体分配任务（当前为占位，阶段 3 实现）。
 - **instance_status**：列出本实例全部实体。
 
 ## 工作流程
 1. 了解需求后，先 instance_status 查看现有人力。
-2. 缺团队则 create_team，缺成员则 create_entity（并为新成员撰写或核验身份与职责描述）。
-3. 使用 assign_task 分配具体任务，并在后续会话中跟进结果、更新记忆与文件。
+2. 缺团队则 create_team，缺成员则 create_entity（优先一次性写入实体三件套）。
+3. 使用 assign_task 分配任务，并持续跟进结果、更新记忆与文件。
 
 ---
 *根据实际业务调整本文件；新成员创建时务必为其写好身份与职责。*
@@ -165,6 +170,11 @@ fn detailed_ceo_agents(display_name: &str) -> String {
 2. 读取 `skills/ceo_entity_designer/SKILL.md`，并按该 skill 执行创建团队/实体相关流程。
 3. 使用 instance_status 查看当前实体列表与状态。
 4. 使用 memory_recall 回顾近期决策与任务进展。
+
+## 统一执行规范
+- 每个任务必须包含 owner、截止时间、输出格式与验收标准。
+- 输出必须可审计：结论、依据、路径、风险、下一步。
+- 高风险、超预算或越权事项必须升级到 admin 审批。
 
 ## 意图归一（强约束）
 - 用户表达“角色/岗位/员工/成员/招人” -> 统一视为创建实体意图。
@@ -258,10 +268,42 @@ fn detailed_entity_agents(display_name: &str, _entity_id: &str, role: Option<&st
     )
 }
 
+/// Bump when embedded admin persona or bundled `admin_company_designer` assets change.
+/// Existing workspaces without this substring in persona files are refreshed on next scaffold.
+const ADMIN_BUNDLE_REVISION: &str = "20250320-1";
+
+/// Marker for user opt-out: if a persona file contains this substring, it is never overwritten.
+/// Use `<!-- multiclaw-admin-bundle:user-locked -->` as first line to preserve local edits.
+pub const ADMIN_BUNDLE_USER_LOCKED: &str = "user-locked";
+
+fn admin_persona_header() -> String {
+    format!("<!-- multiclaw-admin-bundle:{ADMIN_BUNDLE_REVISION} -->\n\n")
+}
+
+/// Returns true if the file should be rewritten with the bundled admin persona.
+/// Returns false if file contains [`ADMIN_BUNDLE_USER_LOCKED`] (user opted out).
+async fn admin_persona_needs_update(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    let s = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("read {}", path.display()))?;
+    if s.contains(ADMIN_BUNDLE_USER_LOCKED) {
+        return Ok(false);
+    }
+    Ok(!s.contains(ADMIN_BUNDLE_REVISION))
+}
+
 /// Scaffold admin (董事长) instance workspace with IDENTITY.md, SOUL.md, AGENTS.md.
 /// Admin is the default conversation target when no instance is specified; used to create
 /// companies (instances), view global state, and send messages to CEO instances.
-/// Only creates files that do not already exist (idempotent).
+///
+/// - Persona files: written when missing **or** when they do not contain [`ADMIN_BUNDLE_REVISION`]
+///   (so upgrades refresh prompts without requiring a full `~/.multiclaw` wipe).
+///   If a file contains [`ADMIN_BUNDLE_USER_LOCKED`], it is **never** overwritten (user opt-out).
+/// - Bundled skill templates under `skills/admin_company_designer/` are **always** overwritten from
+///   the binary so they match the running release.
 pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
     const ADMIN_SKILL_FILES: &[(&str, &str)] = &[
         (
@@ -307,7 +349,7 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
             include_str!("../../assets/skills/admin_company_designer/instance_agents_template.md"),
         ),
     ];
-    const ADMIN_IDENTITY: &str = r#"# IDENTITY.md — 集群董事长（Admin）身份与职责
+    const ADMIN_IDENTITY_BODY: &str = r#"# IDENTITY.md — 集群董事长（Admin）身份与职责
 
 ## 身份
 - **角色：** MultiClaw 集群的 **Admin（董事长）**，同时是**用户的数字分身**。
@@ -335,7 +377,7 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 你应持续维护本文件，使其清晰反映集群管理策略、预算/额度原则与审批规则。
 "#;
 
-    const ADMIN_SOUL: &str = r#"# SOUL.md — 集群董事长（Admin）
+    const ADMIN_SOUL_BODY: &str = r#"# SOUL.md — 集群董事长（Admin）
 
 你是 MultiClaw 集群的 **Admin（董事长）**，也是用户的**数字分身**：替用户管理多实例集群并对关键决策负责。
 
@@ -351,7 +393,7 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 - 需要审批就立刻发起：遇到问题或实例上报的工单，**及时反馈给用户并要求明确审批结果**。
 "#;
 
-    const ADMIN_AGENTS: &str = r#"# AGENTS.md — 集群董事长（Admin）工作规范
+    const ADMIN_AGENTS_BODY: &str = r#"# AGENTS.md — 集群董事长（Admin）工作规范
 
 ## 每会话必做
 1. 阅读 `IDENTITY.md`、`SOUL.md`，确认自己是 **集群 Admin + 用户数字分身**。
@@ -399,25 +441,28 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 - **安全**：不记录/泄露 API Key、配对码等敏感信息；不擅自执行高风险或不可逆操作。
 "#;
 
-    for (filename, content) in [
-        ("IDENTITY.md", ADMIN_IDENTITY),
-        ("SOUL.md", ADMIN_SOUL),
-        ("AGENTS.md", ADMIN_AGENTS),
+    let header = admin_persona_header();
+    for (filename, body) in [
+        ("IDENTITY.md", ADMIN_IDENTITY_BODY),
+        ("SOUL.md", ADMIN_SOUL_BODY),
+        ("AGENTS.md", ADMIN_AGENTS_BODY),
     ] {
         let path = workspace_dir.join(filename);
-        if !path.exists() {
+        if admin_persona_needs_update(&path).await? {
+            let content = format!("{header}{body}");
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
             tokio::fs::write(&path, content).await?;
         }
     }
 
     for (relative_path, content) in ADMIN_SKILL_FILES {
         let path = workspace_dir.join(relative_path);
-        if !path.exists() {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::write(&path, content).await?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
         }
+        tokio::fs::write(&path, content).await?;
     }
 
     Ok(())
@@ -431,10 +476,14 @@ pub async fn scaffold_instance_workspace(workspace_dir: &Path, instance_id: &str
     let identity = format!(
         "# IDENTITY.md — 实例身份与目标\n\n\
          - **实例 ID：** {instance_id}\n\
-         - **定位：** 本实例的默认身份，代表本实例（公司/团队）与用户直接对话。\n\
-         - **与 CEO 的关系：** 管理与协调（建队、分配任务、跟进）由 CEO 实体负责；对话时指定 `--entity ceo` 即使用 CEO。\n\n\
+         - **定位：** 本实例的默认身份，负责对外目标解释、范围边界和结果汇总。\n\
+         - **与 CEO 的关系：** 组织编排（建队、增员、任务分配）由 CEO 负责；实例层负责目标与结果治理。\n\n\
+         ## 核心职责\n\
+         1. 维护业务目标与优先级，确保执行方向一致。\n\
+         2. 汇总 CEO 与实体进展，输出结构化状态（结论/依据/风险/下一步）。\n\
+         3. 对高风险或不确定事项触发升级审批。\n\n\
          ---\n\n\
-         在此填写本实例的名称、目标、业务范围等，作为默认对话的身份。\n"
+         在此补充本实例的名称、目标、业务范围和运营约束。\n"
     );
 
     let soul = format!(
@@ -449,14 +498,18 @@ pub async fn scaffold_instance_workspace(workspace_dir: &Path, instance_id: &str
 
     let agents = format!(
         "# AGENTS.md — {instance_id} 实例规范\n\n\
-         ## 每会话\n\n\
+         ## 每会话必做\n\n\
          1. 阅读 SOUL.md、IDENTITY.md，确认本实例的目标与身份。\n\
          2. 使用 memory_recall 获取近期上下文。\n\n\
+         ## 统一执行规范\n\n\
+         - 输出必须可审计：结论 + 证据 + 路径 + 风险 + 下一步。\n\
+         - 需求不清晰先澄清，禁止在关键假设未确认时推进。\n\
+         - 涉及高风险、超预算或越权事项必须升级审批。\n\n\
          ## 与 CEO 的分工\n\n\
          - 实例层（本目录）：默认对话身份，描述公司/团队目标与能力。\n\
          - CEO 实体（workspace/entities/ceo/）：负责 create_team、create_entity、assign_task、instance_status 等管理操作。\n\n\
          ---\n\n\
-         在此补充本实例的协作规范与约定。\n"
+         在此补充本实例的协作规范与汇报节奏。\n"
     );
 
     for (filename, content) in [
@@ -797,6 +850,8 @@ mod tests {
         scaffold_admin_workspace(tmp.path()).await.unwrap();
 
         let identity = std::fs::read_to_string(tmp.path().join("IDENTITY.md")).unwrap();
+        assert!(identity.contains("multiclaw-admin-bundle"));
+        assert!(identity.contains(ADMIN_BUNDLE_REVISION));
         assert!(identity.contains("董事长") && identity.contains("Admin"));
         assert!(identity.contains("create_company"));
         assert!(identity.contains("action=apply"));
