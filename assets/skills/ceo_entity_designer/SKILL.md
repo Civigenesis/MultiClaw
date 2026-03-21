@@ -34,6 +34,26 @@ Use this skill when CEO handles "create role/member/team" requests.
    - Call `create_entity` once with `identity_md`, `soul_md`, `agents_md`.
 5. Report created ids and workspace paths.
 
+## Detailed Team/Entity Procedure (authoritative)
+1. **Intent normalization**
+   - "角色/岗位/员工/成员/招人" => entity creation.
+   - "团队/小组/部门" => team creation.
+   - If ambiguous, ask one clarification question before any tool call.
+2. **Collect minimal fields**
+   - Team: `id`, optional `name`.
+   - Entity: `id`, `role`, optional `team_id` (default `unassigned`), optional `skills`.
+3. **Prepare markdown before execution**
+   - Use folder templates to generate `identity_md`, `soul_md`, `agents_md`.
+   - Keep role duties concrete and distinct; avoid copy-only variants.
+4. **Confirmation gate**
+   - Show draft and require explicit confirmation before `create_team`/`create_entity`.
+5. **Execute in strict order**
+   - If target team does not exist, call `create_team` first.
+   - Then call `create_entity` once with inline persona markdown.
+6. **Report and close**
+   - Return created ids and workspace paths.
+   - If tool fails, correct payload and retry; do not degrade to random multi-file writes.
+
 ## Template Files (same folder)
 - `entity_identity_template.md`
 - `entity_soul_template.md`
@@ -41,6 +61,9 @@ Use this skill when CEO handles "create role/member/team" requests.
 - `team_template.md`
 
 ## Hard Rules
+- Never call `create_entity` without prepared persona markdown unless user explicitly requests minimal scaffold.
+- Never skip confirmation when creation payload is materially changed.
+- Never bypass this workflow with shell commands.
 - Prefer one-shot `create_entity` with inline persona fields.
 - Do not use `shell` for team/entity creation.
 - Do not use absolute paths in file operations.

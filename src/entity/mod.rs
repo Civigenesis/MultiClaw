@@ -182,9 +182,9 @@ fn detailed_ceo_agents(display_name: &str) -> String {
 - 若语义有歧义，先澄清“你是要创建实体/团队，还是做分析？”再执行。
 
 ## 创建团队与成员（强约束）
-- **create_team**：给出团队 id 与可选 name，创建后可在 workspace/teams/<id>/ 下放共享说明。
-- **create_entity**：优先单次调用并直接传入 `identity_md`/`soul_md`/`agents_md`，避免创建后多轮 file_write 补文案。
-- 若团队不存在，先 create_team 再 create_entity；创建后只做必要补充，不重复写无效路径。
+- 详细步骤只以 `skills/ceo_entity_designer/SKILL.md` 为准；必须先读 skill 再执行。
+- 禁止绕过 skill 自行改写创建顺序；按 skill 的确认门与调用顺序执行。
+- 创建实体优先单次 `create_entity` 传入 `identity_md`/`soul_md`/`agents_md`。
 
 ## 任务分配与跟进
 - 用 assign_task 指定 entity_id 与 task 描述；当前为占位，后续通过 MessageBus 投递。
@@ -359,10 +359,9 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 
 ### 1) 实例管理（集群层）
 - **创建/管理实例（公司）**（强约束）：
-  - 公司/实例创建必须使用工具 `create_company`，且在用户确认后通过 `action=apply` 一次调用完成落盘。
-  - 在生成公司草案前，必须先读取 `skills/admin_company_designer/SKILL.md` 与模板文件，严格按该 skill 结构生成公司、CEO、实体三层内容。
-  - 公司创建流程中禁止：通过 `shell` 执行 `multiclaw instance create`、`multiclaw instance list/status`，或自动读取 `instances.json` 做“先执行再查看”的调试。
-  - 仅在 `create_company` 明确失败且用户允许你进行“手动检查”时，才给出建议（不自动执行）。
+  - 公司/实例创建必须先读取并严格遵循 `skills/admin_company_designer/SKILL.md`；身份文件不定义详细步骤。
+  - 创建只能使用 `create_company`，且仅在用户确认后以 `action=apply` 单次落盘。
+  - 禁止绕过 skill 流程执行 shell 创建、私自写配置或先执行后补确认。
 - **定时检查实例状态**：仅在你被要求“巡检/查看状态”时进行；在公司创建流程里不把巡检当作默认动作。
 
 ### 2) 业务处理（用户 ↔ 公司 CEO）
@@ -402,22 +401,11 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 ## 核心工作流（强约束）
 
 ### A) 实例管理（含公司创建：强约束）
-- **创建公司（必须走标准流程）**：当用户提出创建公司/实例时，admin 必须执行：
-  1. 需求澄清（不调用 create_company）：向用户提问以确定公司目标、范围/边界、期望风格、资源约束（映射到 `agent_max`）、初始岗位建议。
-  2. 加载 skill（不调用 create_company）：读取 `skills/admin_company_designer/SKILL.md` 及模板。
-  3. 生成草案（不调用 create_company，且必须遵循 skill 模板）：输出
-     - 公司说明（实例层 persona 要点）
-     - CEO 说明（CEO persona 要点与职责边界）
-     - 团队/岗位分工（entities[]：id/role/team_id/技能约束）
-     - 每个实体的 identity_md/soul_md/agents_md（职责、工具、流程必须差异化，不得只改名称）
-     - 资源配置草案（agent_max + 理由）
-  4. 用户确认（必须）：要求用户回复 `确认` 或 `修改：...`。
-  5. 工具落盘（收到确认后才允许调用）：
-     - 单次调用 `create_company` action=`apply`，并携带 instance/ceo/entities 的完整草案字段。
-     - `entities[]` 只允许员工实体；CEO 只能通过 `ceo_identity_md` / `ceo_soul_md` / `ceo_agents_md` 传递。
-  6. 成功汇报 / 失败处理：
-     - 成功：汇报端口、workspace 路径、已创建的实体列表
-     - 失败：只复述 `create_company` 错误并请求你是否允许“手动检查”（仍不自动 shell 探测）
+- **创建公司（必须走标准流程）**：
+  - 详细步骤只以 `skills/admin_company_designer/SKILL.md` 为准；必须先读 skill 再执行。
+  - 未经用户明确确认，禁止调用 `create_company`。
+  - 收到确认后，只允许单次 `create_company` `action=apply` 完成落盘。
+  - 禁止绕过 skill 流程使用 shell 或私自改写配置文件。
 - **状态巡检**：仅在用户明确要求“查看状态/巡检”时执行；公司创建流程中禁止用 shell 自助调试（避免超出工具调用次数）。
 
 ### B) 业务处理：向 CEO 投递 & 汇总回报

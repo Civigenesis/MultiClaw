@@ -27,6 +27,25 @@ Use this skill when admin handles "create company/instance" requests.
 3. Present draft and request explicit user confirmation.
 4. After confirmation, call `create_company` once with `action="apply"` and full payload.
 
+## Detailed Company-Creation Procedure (authoritative)
+1. **Clarify before any tool call**
+   - Confirm: `company_id`, business goal, in-scope/out-of-scope, compliance constraints.
+   - Confirm: initial org design (CEO + employee entities), `team_id`, role boundaries.
+   - Confirm: resource constraint and expected `agent_max`.
+2. **Load templates and assemble full draft**
+   - Build instance-level markdown: `instance_identity_md`, `instance_soul_md`, `instance_agents_md`.
+   - Build CEO-level markdown: `ceo_identity_md`, `ceo_soul_md`, `ceo_agents_md`.
+   - Build employee entities only: each item must include `id`, `role`, `team_id` (or `unassigned`), `skills`, `identity_md`, `soul_md`, `agents_md`.
+3. **Draft review with user**
+   - Present the full draft in structured form.
+   - Require explicit confirmation (`确认`) or explicit modifications (`修改: ...`).
+4. **Single apply execution**
+   - After explicit confirmation, call `create_company` exactly once with `action="apply"`.
+   - Include the complete payload in that single call (instance + ceo + entities + constraints).
+5. **Result report**
+   - On success: report created company id, paths, and created entity list.
+   - On failure: report tool error verbatim and ask user whether to revise payload.
+
 ## Template Files (same folder)
 - `instance_identity_template.md`
 - `instance_soul_template.md`
@@ -39,6 +58,9 @@ Use this skill when admin handles "create company/instance" requests.
 - `entity_agents_template.md`
 
 ## Hard Rules
+- Never call `create_company` before explicit user confirmation.
+- Never use `create_company` for draft simulation; this skill does drafting in-chat.
+- Never bypass this workflow by switching to ad-hoc shell/handwritten file creation.
 - `entities[]` includes employee entities only; never place CEO in `entities[]`.
 - CEO content must use: `ceo_identity_md`, `ceo_soul_md`, `ceo_agents_md`.
 - For every employee entity, generate all fields:

@@ -1,16 +1,16 @@
-# AGENTS.md - CEO
+# AGENTS.md — CEO 运行规范
 
-## Session checklist
-1. Review current entity map and workloads.
-2. Review pending deliverables and blockers.
-3. Plan assignments with measurable outcomes.
-4. For hiring/team setup, follow `skills/ceo_entity_designer/SKILL.md`.
+## 每会话必做
+1. 读取 `IDENTITY.md` 与 `SOUL.md`，确认本轮目标、资源约束与风险边界。
+2. 调用 `instance_status` 检查当前团队结构、负载与缺口。
+3. 调用 `memory_recall` 回顾上轮决策、阻塞、待审批事项。
+4. 创建团队/实体前，先读取 `skills/ceo_entity_designer/SKILL.md`。
 
-## Coordination rules
-- Each task must include owner, due window, output format.
-- Keep a single source of truth for progress and decisions.
-- Escalate budget/scope conflicts to admin.
-- Normalize intent:
-  - "角色/岗位/员工/成员/招人" => create entity
-  - "团队/小组/部门" => create team
-- Prefer one-shot `create_entity` with `identity_md/soul_md/agents_md` to avoid extra file writes.
+## 统一执行规范
+- 每个任务必须明确 owner、截止时间、输出格式与验收标准。
+- 输出必须可审计：结论、依据、路径、风险、下一步。
+- 预算/范围冲突必须升级到 admin，不可静默扩大执行范围。
+
+## 创建流程规则（强约束）
+- 创建团队/实体前必须先读取并严格遵循 `skills/ceo_entity_designer/SKILL.md`；不得自行改写流程。
+- 禁止绕过 skill 流程直接执行随意工具调用；仅允许按 skill 中确认门与执行顺序落盘。
