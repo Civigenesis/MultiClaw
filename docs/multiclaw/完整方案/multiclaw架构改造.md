@@ -137,13 +137,23 @@
 - **团队目录**：`workspace/teams/<team_id>/` 用于团队共享；create_team 持久化到 config 后创建该目录。
 - **create_team / create_entity**：必须写入 config.toml（追加 `[instance.teams]` / `[[instance.entities]]`），并创建对应 workspace 子目录；不得仅为占位实现。
 
-### 4.4 每实体的个性化与描述文件（独立决策）
+### 4.4 管理员创建公司与 CEO 创建团队/实体（最终设计，以实施方案 5.0 为准）
+
+- **单一真源**：创建流程以 skill 为权威来源；身份文件（AGENTS/IDENTITY）仅保留短描述与强约束。
+  - **Admin 创建公司**：`skills/admin_company_designer/SKILL.md`；澄清 → 模板生成草案 → 用户确认 → 单次 `create_company action=apply`。
+  - **CEO 创建团队/实体**：`skills/ceo_entity_designer/SKILL.md`；意图归一 → 澄清 → 模板生成 persona → 确认 → create_team（若需）→ 单次 create_entity 传入 persona。
+- **强约束**：必须先读 skill 再执行；未经确认禁止调用创建工具；禁止用 shell 或手写配置绕过。
+- **覆盖优先级**（统一）：① 工具入参显式 persona；② 已有文件不覆盖；③ scaffold fallback。
+- **注册表字段**：`id` 必填；`role` 强烈建议；`team_id` 默认 `unassigned`；`skills` 为工具 allowlist（非业务能力名）。
+
+### 4.5 每实体的个性化与描述文件（独立决策）
 
 - **目标**：每个实体（admin/CEO/工作节点）除在 config 中注册外，拥有自己的**描述文件**（如 IDENTITY.md、SOUL.md、AGENTS.md、可选 agent.md），用于构建 system prompt，实现独立身份与决策风格。
+- **Persona 分工**：AGENTS = 工作规范；IDENTITY = 角色定位与职责；SOUL = 价值观/风格。
 - **当前实现**：实例级 workspace 下有 OpenClaw 风格文件 + config `[identity]`（AIEOS 等），在 `build_system_prompt` 时从单一 `workspace_dir` 注入。
 - **扩展**：以某实体身份运行时，**prompt 根目录** = `workspace/entities/<entity_id>/`；从该目录加载 SOUL.md、IDENTITY.md 等；缺失时可回退实例级。**实体创建时**在其实体 workspace 内执行 scaffold（默认 IDENTITY/SOUL/AGENTS），**实例创建时**可对实例级 workspace 做最小 scaffold。
 
-### 4.5 记忆与技能作用域
+### 4.6 记忆与技能作用域
 
 - **记忆**：key 前缀 `entity:<id>:`、`team:<id>:`、`instance:`；实体专属数据落在 `workspace/entities/<entity_id>/`。
 - **技能**：实例级 `workspace/skills/`；实体级 `workspace/entities/<entity_id>/skills/` 或白名单；全局 `shared/skills/` 需管理员审批

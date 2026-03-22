@@ -643,6 +643,12 @@ Key rules:
   - Employee entities: `instances/<instance_id>/workspace/entities/<entity_id>/`
 - If you start the agent **without specifying `--entity`**, the conversation is with the **company entity** (instance root workspace / `instances/<instance_id>/workspace/`).
 
+**Creation flows (skill-based):**
+
+- **Admin creates company** — `create_company` tool; flow defined in `skills/admin_company_designer/SKILL.md`; clarify → draft → user confirm → single `action=apply`.
+- **CEO creates team/entity** — `create_team` / `create_entity` tools; flow in `skills/ceo_entity_designer/SKILL.md`; intent normalization → clarify → confirm → single apply with persona markdown.
+- Persona split: `AGENTS.md` = norms, `IDENTITY.md` = role, `SOUL.md` = style.
+
 ### Full directory tree (default `~/.multiclaw`)
 
 ```text
