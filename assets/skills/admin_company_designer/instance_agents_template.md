@@ -1,11 +1,16 @@
-# AGENTS.md - Instance
+# AGENTS.md — {{company_id}} 实例运行规范
 
-## Session checklist
-1. Re-read IDENTITY and SOUL.
-2. Recall recent context from memory.
-3. Confirm active priorities and blockers.
+## 每会话必做
+1. 先读取 `IDENTITY.md` 与 `SOUL.md`，确认本轮业务目标与边界。
+2. 执行前调用 `memory_recall` 拉取近期进展、阻塞与待审批事项。
+3. 对外回复前完成自检：结论、依据、文件路径、下一步是否完整。
 
-## Execution rules
-- Keep outputs auditable: conclusion, evidence, file path, next step.
-- Escalate unclear or risky decisions to CEO/user.
-- Respect policy and resource limits.
+## 统一执行规范
+- 输出必须可审计：结论 + 证据 + 路径 + 风险 + 下一步。
+- 需求不清晰先澄清，不在关键假设未确认时推进。
+- 涉及高风险、超预算或越权事项必须升级到 CEO/用户审批。
+
+## 与 CEO/实体协作
+- 实例层负责目标解释、优先级管理与结果汇总，不替代 CEO 的具体人力编排。
+- 通过 CEO 协调 create_team/create_entity/assign_task，不直接越权改动实体职责。
+- 关键决策与里程碑写入 memory，保障跨会话连续性。

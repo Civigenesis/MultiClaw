@@ -4372,6 +4372,21 @@ impl Config {
 
             config.apply_env_overrides();
             config.validate()?;
+
+            // Refresh bundled admin workspace assets (persona revision + skill templates) on every
+            // load when the runtime target is the admin instance. Otherwise `ensure_admin_instance`
+            // only runs on first cluster bootstrap and upgraded binaries never re-scaffold.
+            if in_cluster_mode
+                && matches!(
+                    effective_instance_id.as_deref(),
+                    Some(id) if id == multiclaw::instance_manager::ADMIN_INSTANCE_ID
+                )
+            {
+                crate::entity::scaffold_admin_workspace(&config.workspace_dir)
+                    .await
+                    .context("Failed to refresh admin (董事长) workspace assets")?;
+            }
+
             tracing::info!(
                 path = %config.config_path.display(),
                 workspace = %config.workspace_dir.display(),

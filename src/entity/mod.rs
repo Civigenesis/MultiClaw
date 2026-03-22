@@ -359,7 +359,7 @@ pub async fn scaffold_admin_workspace(workspace_dir: &Path) -> Result<()> {
 
 ### 1) 实例管理（集群层）
 - **创建/管理实例（公司）**（强约束）：
-  - 公司/实例创建必须先读取并严格遵循 `skills/admin_company_designer/SKILL.md`；身份文件不定义详细步骤。
+  - 公司/实例创建必须先读取并严格遵循 `skills/admin_company_designer/SKILL.md`。
   - 创建只能使用 `create_company`，且仅在用户确认后以 `action=apply` 单次落盘。
   - 禁止绕过 skill 流程执行 shell 创建、私自写配置或先执行后补确认。
 - **定时检查实例状态**：仅在你被要求“巡检/查看状态”时进行；在公司创建流程里不把巡检当作默认动作。
