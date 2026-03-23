@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
-mod audit;
+pub mod audit;
 
 const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
 const OPEN_SKILLS_SYNC_MARKER: &str = ".multiclaw-open-skills-sync";
@@ -76,13 +76,54 @@ pub fn load_skills(workspace_dir: &Path) -> Vec<Skill> {
     load_skills_with_open_skills_config(workspace_dir, None, None)
 }
 
+/// Resolve cluster/global skill packs directory (`[skills].shared_skills_dir` or `{cluster_root}/shared/skills`).
+#[must_use]
+pub fn resolve_shared_skills_dir(config: &crate::config::Config) -> std::path::PathBuf {
+    if let Some(ref p) = config.skills.shared_skills_dir {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(root) = crate::config::schema::cluster_root() {
+        return root.join("shared").join("skills");
+    }
+    config.workspace_dir.join("shared").join("skills")
+}
+
 /// Load skills using runtime config values (preferred at runtime).
+/// Merge order (later wins on same `Skill::name`): open-skills → shared skills dir → workspace `skills/`.
 pub fn load_skills_with_config(workspace_dir: &Path, config: &crate::config::Config) -> Vec<Skill> {
-    load_skills_with_open_skills_config(
-        workspace_dir,
-        Some(config.skills.open_skills_enabled),
-        config.skills.open_skills_dir.as_deref(),
-    )
+    let open = {
+        let mut skills = Vec::new();
+        if let Some(open_skills_dir) = ensure_open_skills_repo(
+            Some(config.skills.open_skills_enabled),
+            config.skills.open_skills_dir.as_deref(),
+        ) {
+            skills.extend(load_open_skills(&open_skills_dir));
+        }
+        skills
+    };
+    let shared_dir = resolve_shared_skills_dir(config);
+    let shared = load_skills_from_directory(&shared_dir);
+    let workspace = load_workspace_skills(workspace_dir);
+    merge_skills_by_name_priority(open, shared, workspace)
+}
+
+fn merge_skills_by_name_priority(
+    open: Vec<Skill>,
+    shared: Vec<Skill>,
+    workspace: Vec<Skill>,
+) -> Vec<Skill> {
+    use std::collections::HashMap;
+    let mut m: HashMap<String, Skill> = HashMap::new();
+    for s in open {
+        m.insert(s.name.clone(), s);
+    }
+    for s in shared {
+        m.insert(s.name.clone(), s);
+    }
+    for s in workspace {
+        m.insert(s.name.clone(), s);
+    }
+    m.into_values().collect()
 }
 
 fn load_skills_with_open_skills_config(

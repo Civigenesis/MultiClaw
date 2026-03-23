@@ -116,6 +116,10 @@ Channel runtime cũng theo dõi `config.toml` và tự động áp dụng thay �
 
 Skill manifest (`SKILL.toml`) hỗ trợ `prompts` và `[[tools]]`; cả hai được đưa vào system prompt của agent khi chạy, giúp model có thể tuân theo hướng dẫn skill mà không cần đọc thủ công.
 
+### Công cụ agent runtime (gọi qua LLM)
+
+- **`tool_inventory`** — Truy vấn danh mục chuẩn cho **`[[instance.entities]].skills`**: tên công cụ, mô tả, bậc gán (`standard` vs `elevated_dev_only` cho công cụ rủi ro cao như `shell`), và công cụ chỉ dành cho admin/CEO (không hợp lệ trong `skills` của entity). Tham số JSON tùy chọn: `scope` = `assignable` hoặc `full`. Luôn có sẵn kể cả khi entity dùng allowlist kỹ năng hạn chế.
+
 ### `migrate`
 
 - `multiclaw migrate openclaw [--source <path>] [--dry-run]`

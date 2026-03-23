@@ -29,6 +29,7 @@ pub mod cron_run;
 pub mod cron_runs;
 pub mod cron_update;
 pub mod delegate;
+pub mod entity_skills;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
@@ -53,6 +54,8 @@ pub mod schedule;
 pub mod schema;
 pub mod screenshot;
 pub mod shell;
+pub mod skill_pack;
+pub mod tool_inventory;
 pub mod traits;
 pub mod web_fetch;
 pub mod web_search_tool;
@@ -94,6 +97,7 @@ pub use schedule::ScheduleTool;
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;
 pub use shell::ShellTool;
+pub use tool_inventory::ToolInventoryTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ToolResult, ToolSpec};
@@ -220,6 +224,7 @@ pub fn all_tools_with_runtime(
     agent_max: Option<u32>,
 ) -> Vec<Box<dyn Tool>> {
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(ToolInventoryTool::new()),
         Arc::new(ShellTool::new(security.clone(), runtime)),
         Arc::new(FileReadTool::new(security.clone())),
         Arc::new(FileWriteTool::new(security.clone())),
@@ -251,6 +256,23 @@ pub fn all_tools_with_runtime(
         )),
         Arc::new(CreateCompanyTool::new(root_config.config_path.clone())),
     ];
+
+    let shared_skills_dir = crate::skills::resolve_shared_skills_dir(root_config);
+    let workspace_skills_base = workspace_dir.to_path_buf();
+    tool_arcs.push(Arc::new(skill_pack::SkillIndexTool::new(
+        workspace_skills_base.clone(),
+        shared_skills_dir.clone(),
+    )));
+    tool_arcs.push(Arc::new(skill_pack::LoadSkillTool::new(
+        workspace_skills_base,
+        shared_skills_dir,
+        target_entity_id.map(std::string::ToString::to_string),
+        entity_pool.clone(),
+    )));
+    tool_arcs.push(Arc::new(skill_pack::ClawhubSearchTool::new(config.clone())));
+    tool_arcs.push(Arc::new(skill_pack::ClawhubExploreTool::new(
+        config.clone(),
+    )));
 
     if browser_config.enabled {
         // Add legacy browser_open tool for simple URL opening
@@ -365,17 +387,19 @@ pub fn all_tools_with_runtime(
                 agent_max,
                 config_path,
                 workspace_dir,
+                config.clone(),
             ));
         }
     }
 
-    // Per-entity skills allowlist: when set and non-empty, only expose those tools.
+    // Per-entity tool allowlist: when set and non-empty, only expose those tools.
+    // Always keep `tool_inventory` so agents can query the canonical tool catalog.
     if let (Some(ref pool), Some(eid)) = (entity_pool, target_entity_id) {
         if let Some(entity) = pool.get(eid) {
-            if !entity.skills_allowlist.is_empty() {
+            if !entity.tool_allowlist.is_empty() {
                 let allow: std::collections::HashSet<&str> =
-                    entity.skills_allowlist.iter().map(String::as_str).collect();
-                tool_arcs.retain(|t| allow.contains(t.name()));
+                    entity.tool_allowlist.iter().map(String::as_str).collect();
+                tool_arcs.retain(|t| t.name() == "tool_inventory" || allow.contains(t.name()));
             }
         }
     }
@@ -665,5 +689,41 @@ mod tests {
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"delegate"));
+    }
+
+    #[test]
+    fn all_tools_includes_skill_index_and_load_skill() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+
+        let browser = BrowserConfig::default();
+        let http = crate::config::HttpRequestConfig::default();
+        let cfg = test_config(&tmp);
+
+        let tools = all_tools(
+            Arc::new(Config::default()),
+            &security,
+            mem,
+            None,
+            None,
+            &browser,
+            &http,
+            &crate::config::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &cfg,
+        );
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"skill_index"));
+        assert!(names.contains(&"load_skill"));
+        assert!(names.contains(&"clawhub_search"));
+        assert!(!names.contains(&"clawhub_import_global"));
     }
 }

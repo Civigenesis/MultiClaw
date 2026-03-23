@@ -46,11 +46,11 @@ Usage: ./dev/ci.sh <command>
 Commands:
   build-image   Build/update the local CI image
   shell         Open an interactive shell inside the CI container
-  lint          Run rustfmt + clippy correctness gate (container only)
-  lint-strict   Run rustfmt + full clippy warnings gate (container only)
-  lint-delta    Run strict lint delta gate on changed Rust lines (container only)
-  test          Run cargo test (container only)
-  build         Run release build smoke check (container only)
+  lint          Build web UI, then rustfmt + clippy correctness gate (container only)
+  lint-strict   Build web UI, then rustfmt + full clippy warnings gate (container only)
+  lint-delta    Build web UI, then strict lint delta on changed Rust lines (container only)
+  test          Build web UI, then cargo test (container only)
+  build         Build web UI, then release build smoke check (container only)
   audit         Run cargo audit (container only)
   deny          Run cargo deny check (container only)
   security      Run cargo audit + cargo deny (container only)
@@ -75,23 +75,23 @@ case "$1" in
     ;;
 
   lint)
-    run_in_ci "./scripts/ci/rust_quality_gate.sh"
+    run_in_ci "./scripts/ci/web_build_gate.sh && ./scripts/ci/rust_quality_gate.sh"
     ;;
 
   lint-strict)
-    run_in_ci "./scripts/ci/rust_quality_gate.sh --strict"
+    run_in_ci "./scripts/ci/web_build_gate.sh && ./scripts/ci/rust_quality_gate.sh --strict"
     ;;
 
   lint-delta)
-    run_in_ci "./scripts/ci/rust_strict_delta_gate.sh"
+    run_in_ci "./scripts/ci/web_build_gate.sh && ./scripts/ci/rust_strict_delta_gate.sh"
     ;;
 
   test)
-    run_in_ci "cargo test --locked --verbose"
+    run_in_ci "./scripts/ci/web_build_gate.sh && cargo test --locked --verbose"
     ;;
 
   build)
-    run_in_ci "cargo build --release --locked --verbose"
+    run_in_ci "./scripts/ci/web_build_gate.sh && cargo build --release --locked --verbose"
     ;;
 
   audit)
@@ -113,7 +113,7 @@ case "$1" in
     ;;
 
   all)
-    run_in_ci "./scripts/ci/rust_quality_gate.sh"
+    run_in_ci "./scripts/ci/web_build_gate.sh && ./scripts/ci/rust_quality_gate.sh"
     run_in_ci "cargo test --locked --verbose"
     run_in_ci "cargo build --release --locked --verbose"
     run_in_ci "cargo deny check licenses sources"

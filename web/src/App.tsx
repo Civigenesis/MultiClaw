@@ -27,6 +27,29 @@ export const LocaleContext = createContext<LocaleContextType>({
 
 export const useLocaleContext = () => useContext(LocaleContext);
 
+function ConnectionErrorScreen({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+      <div className="bg-gray-900 rounded-xl p-8 w-full max-w-md border border-gray-800 text-center">
+        <h1 className="text-2xl font-bold text-white mb-2">MultiClaw</h1>
+        <p className="text-gray-400 mb-6">
+          Cannot reach the gateway <code className="text-gray-300">/health</code> endpoint. Open the
+          dashboard from the same URL as the daemon (for example{' '}
+          <code className="text-gray-300">http://127.0.0.1:42618/</code>), or confirm the process is
+          running.
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Pairing dialog component
 function PairingDialog({ onPair }: { onPair: (code: string) => Promise<void> }) {
   const [code, setCode] = useState('');
@@ -80,7 +103,7 @@ function PairingDialog({ onPair }: { onPair: (code: string) => Promise<void> }) 
 }
 
 function AppContent() {
-  const { isAuthenticated, loading, pair, logout } = useAuth();
+  const { isAuthenticated, loading, healthUnreachable, pair, logout, retryHealth } = useAuth();
   const [locale, setLocaleState] = useState('tr');
 
   const setAppLocale = (newLocale: string) => {
@@ -106,6 +129,9 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
+    if (healthUnreachable) {
+      return <ConnectionErrorScreen onRetry={retryHealth} />;
+    }
     return <PairingDialog onPair={pair} />;
   }
 

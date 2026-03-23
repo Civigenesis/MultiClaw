@@ -517,13 +517,16 @@ pub async fn scaffold_instance_workspace(workspace_dir: &Path, instance_id: &str
 /// Fixed entity id for the CEO entity.
 pub const CEO_ENTITY_ID: &str = "ceo";
 
-/// Runtime view of a single entity: id, provider/model overrides, skills allowlist.
+/// Runtime view of a single entity: id, provider/model overrides, tool + skill allowlists.
 #[derive(Debug, Clone)]
 pub struct EntityRuntime {
     pub id: String,
     pub provider_override: Option<String>,
     pub model_override: Option<String>,
-    pub skills_allowlist: Vec<String>,
+    /// Executable `Tool::name()` allowlist; empty = full tool set (same as unset).
+    pub tool_allowlist: Vec<String>,
+    /// Skill package ids for `load_skill`; empty means none (except CEO: treat as allow-all).
+    pub skill_allowlist: Vec<String>,
 }
 
 /// Pool of entities (CEO + configured entities) for one instance.
@@ -545,7 +548,8 @@ impl EntityPool {
                 id: CEO_ENTITY_ID.to_string(),
                 provider_override: instance.default_provider.clone(),
                 model_override: instance.default_model.clone(),
-                skills_allowlist: vec![], // CEO gets full tool set; filtering is by current_entity_id
+                tool_allowlist: vec![], // CEO gets full tool set; filtering is by current_entity_id
+                skill_allowlist: vec![], // CEO: empty = allow any installed skill for load_skill
             });
         }
 
@@ -557,7 +561,8 @@ impl EntityPool {
                     .clone()
                     .or_else(|| instance.default_provider.clone()),
                 model_override: e.model.clone().or_else(|| instance.default_model.clone()),
-                skills_allowlist: e.skills.clone().unwrap_or_default(),
+                tool_allowlist: e.tool_allowlist.clone().unwrap_or_default(),
+                skill_allowlist: e.skill_allowlist.clone().unwrap_or_default(),
             });
         }
 
@@ -625,10 +630,32 @@ impl EntityPool {
             id: config.id.clone(),
             provider_override: config.provider,
             model_override: config.model,
-            skills_allowlist: config.skills.unwrap_or_default(),
+            tool_allowlist: config.tool_allowlist.unwrap_or_default(),
+            skill_allowlist: config.skill_allowlist.unwrap_or_default(),
         };
         entities.push(runtime.clone());
         Ok(runtime)
+    }
+
+    /// Merge skill package ids into an entity's in-memory `skill_allowlist` (after config save).
+    pub fn merge_skill_allowlist(&self, entity_id: &str, skill_ids: &[String]) -> Result<()> {
+        let mut entities = self
+            .entities
+            .write()
+            .map_err(|_| anyhow::anyhow!("entity pool lock poisoned"))?;
+        let Some(entity) = entities.iter_mut().find(|e| e.id == entity_id) else {
+            bail!("entity '{}' not found", entity_id);
+        };
+        for s in skill_ids {
+            let t = s.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if !entity.skill_allowlist.iter().any(|x| x == t) {
+                entity.skill_allowlist.push(t.to_string());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -652,7 +679,8 @@ mod tests {
                     model: Some("gpt-4".to_string()),
                     team_id: Some("content".to_string()),
                     role: Some("writer".to_string()),
-                    skills: Some(vec!["file".to_string(), "web".to_string()]),
+                    tool_allowlist: Some(vec!["file".to_string(), "web".to_string()]),
+                    skill_allowlist: None,
                 },
                 EntityConfig {
                     id: "reviewer".to_string(),
@@ -660,7 +688,8 @@ mod tests {
                     model: None,
                     team_id: Some("content".to_string()),
                     role: None,
-                    skills: None,
+                    tool_allowlist: None,
+                    skill_allowlist: None,
                 },
             ],
             teams: vec![],
@@ -680,7 +709,7 @@ mod tests {
         assert_eq!(ceo.id, CEO_ENTITY_ID);
         assert_eq!(ceo.provider_override.as_deref(), Some("openai"));
         let writer = pool.get("writer").expect("writer should exist");
-        assert_eq!(writer.skills_allowlist, &["file", "web"]);
+        assert_eq!(writer.tool_allowlist, &["file", "web"]);
         let reviewer = pool.get("reviewer").expect("reviewer should exist");
         assert_eq!(reviewer.provider_override.as_deref(), Some("openai"));
         let ids = pool.list();
@@ -688,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn entity_runtime_skills_allowlist_respected() {
+    fn entity_runtime_tool_allowlist_respected() {
         let instance = instance_config_with_ceo_and_entities();
         let config = Config {
             instance: Some(instance),
@@ -696,9 +725,9 @@ mod tests {
         };
         let pool = EntityPool::from_config(&config).unwrap();
         let writer = pool.get("writer").unwrap();
-        assert_eq!(writer.skills_allowlist, ["file", "web"]);
+        assert_eq!(writer.tool_allowlist, ["file", "web"]);
         let reviewer = pool.get("reviewer").unwrap();
-        assert!(reviewer.skills_allowlist.is_empty());
+        assert!(reviewer.tool_allowlist.is_empty());
     }
 
     #[test]
@@ -732,7 +761,8 @@ mod tests {
                 id: "a".to_string(),
                 provider_override: None,
                 model_override: None,
-                skills_allowlist: vec![],
+                tool_allowlist: vec![],
+                skill_allowlist: vec![],
             }]),
         });
         let config_b = EntityConfig {
@@ -741,7 +771,8 @@ mod tests {
             model: None,
             team_id: None,
             role: None,
-            skills: None,
+            tool_allowlist: None,
+            skill_allowlist: None,
         };
         // agent_max = 2: can add one more
         let r = pool.create_entity(config_b.clone(), Some(2));
@@ -754,7 +785,8 @@ mod tests {
             model: None,
             team_id: None,
             role: None,
-            skills: None,
+            tool_allowlist: None,
+            skill_allowlist: None,
         };
         let r2 = pool.create_entity(config_c, Some(2));
         assert!(r2.is_err());

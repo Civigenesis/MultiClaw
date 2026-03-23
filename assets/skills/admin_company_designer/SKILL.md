@@ -33,6 +33,7 @@ Use this skill when admin handles "create company/instance" requests.
    - Confirm: initial org design (CEO + employee entities), `team_id`, role boundaries.
    - Confirm: resource constraint and expected `agent_max`.
 2. **Load templates and assemble full draft**
+   - **Before filling `entities[].skills`**: call the `tool_inventory` tool (prefer `scope: "full"` once) and use **only** names from `entity_assignable_skills` with matching `tier` and `policy_note`. Do not invent tool names.
    - Build instance-level markdown: `instance_identity_md`, `instance_soul_md`, `instance_agents_md`.
    - Build CEO-level markdown: `ceo_identity_md`, `ceo_soul_md`, `ceo_agents_md`.
    - Build employee entities only: each item must include `id`, `role`, `team_id` (or `unassigned`), `skills`, `identity_md`, `soul_md`, `agents_md`.
@@ -45,6 +46,8 @@ Use this skill when admin handles "create company/instance" requests.
 5. **Result report**
    - On success: report created company id, paths, and created entity list.
    - On failure: report tool error verbatim and ask user whether to revise payload.
+   - **Do not auto-retry**: if `create_company` returns an error, do **not** call it again without explicit user confirmation.
+   - If error contains "already exists" or "已存在": treat as creation completed; report current state and do **not** call `create_company` again.
 
 ## Template Files (same folder)
 - `instance_identity_template.md`
@@ -68,13 +71,18 @@ Use this skill when admin handles "create company/instance" requests.
   - `soul_md`
   - `agents_md`
 - `team_id` should be explicit for every entity; if unknown, use `unassigned`.
-- `skills` must contain tool allowlist names (e.g. `file_read`, `memory_recall`), not business capability labels.
+- **Skill policy (tiers)** — use `tool_inventory` output; do not guess:
+  - **Standard** (`tier: standard`): safe for most business roles; assign as needed.
+  - **Elevated** (`tier: elevated_dev_only`, e.g. `shell`): only when `role` clearly indicates development/engineering work (e.g. 开发/工程师/dev). Do **not** assign elevated tools to generic ops/marketing/content roles.
+- **Not entity skills**: entries under `not_assignable_to_entities` (e.g. `create_company`, CEO-only tools) must never appear in `entities[].skills`.
 - Role descriptions must be materially different (not name-only variations).
-- Do not call shell commands for company creation flow.
+- Do not use the `shell` **tool** for company creation flow (that is separate from assigning `shell` in `skills` for a dev entity).
 
 ## Output Checklist Before Apply
+- **Catalog**: `tool_inventory` has been called and `skills` align with `tier` + role.
 - Instance layer: `instance_identity_md`, `instance_soul_md`, `instance_agents_md`
 - CEO layer: `ceo_identity_md`, `ceo_soul_md`, `ceo_agents_md`
 - Entity layer: each entity has `id`, `role`, optional `team_id`, optional `skills`, and three markdown fields
+- **Skills check**: only assignable tool names from `tool_inventory`; no business labels; elevated tools only with dev-like `role`
 - Resource layer: `agent_max` plus rationale
 - Confirmation: user explicitly confirmed the draft

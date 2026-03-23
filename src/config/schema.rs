@@ -282,8 +282,12 @@ pub struct EntityConfig {
     pub team_id: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    /// Allowlist of executable tool names (`Tool::name()`), e.g. `file_read`, `shell`.
     #[serde(default)]
-    pub skills: Option<Vec<String>>,
+    pub tool_allowlist: Option<Vec<String>>,
+    /// Allowlist of skill package ids (directory names under `skills/`) for `load_skill`.
+    #[serde(default)]
+    pub skill_allowlist: Option<Vec<String>>,
 }
 
 /// Team definition (enterprise / project).
@@ -539,6 +543,38 @@ fn parse_skills_prompt_injection_mode(raw: &str) -> Option<SkillsPromptInjection
     }
 }
 
+/// Remote ClawHub registry (`[skills.clawhub]`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClawHubConfig {
+    /// When true, tools may call the ClawHub HTTP API (`clawhub_search`, etc.).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Registry base URL (default matches official CLI: `https://clawhub.ai`).
+    #[serde(default)]
+    pub registry_url: Option<String>,
+    /// Optional bearer/API token (same role as `clawhub` CLI config).
+    #[serde(default)]
+    pub token: Option<String>,
+    /// HTTP timeout in milliseconds.
+    #[serde(default = "default_clawhub_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_clawhub_timeout_ms() -> u64 {
+    30_000
+}
+
+impl Default for ClawHubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            registry_url: None,
+            token: None,
+            timeout_ms: default_clawhub_timeout_ms(),
+        }
+    }
+}
+
 /// Skills loading configuration (`[skills]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SkillsConfig {
@@ -550,6 +586,12 @@ pub struct SkillsConfig {
     /// If unset, defaults to `$HOME/open-skills` when enabled.
     #[serde(default)]
     pub open_skills_dir: Option<String>,
+    /// Optional cluster-wide skill packs directory (`shared/skills/<id>/`).
+    /// If unset, defaults to `{cluster_root}/shared/skills` when cluster root resolves.
+    #[serde(default)]
+    pub shared_skills_dir: Option<String>,
+    #[serde(default)]
+    pub clawhub: ClawHubConfig,
     /// Controls how skills are injected into the system prompt.
     /// `full` preserves legacy behavior. `compact` keeps context small and loads skills on demand.
     #[serde(default)]
@@ -561,6 +603,8 @@ impl Default for SkillsConfig {
         Self {
             open_skills_enabled: false,
             open_skills_dir: None,
+            shared_skills_dir: None,
+            clawhub: ClawHubConfig::default(),
             prompt_injection_mode: SkillsPromptInjectionMode::default(),
         }
     }
@@ -5231,7 +5275,7 @@ provider = "openai"
 model = "gpt-4"
 team_id = "content"
 role = "writer"
-skills = ["file", "web"]
+tool_allowlist = ["file", "web"]
 
 [[instance.entities]]
 id = "reviewer"
@@ -5257,7 +5301,10 @@ name = "Docs"
         assert_eq!(inst.entities.len(), 2);
         assert_eq!(inst.entities[0].id, "writer");
         assert_eq!(inst.entities[0].provider.as_deref(), Some("openai"));
-        assert_eq!(inst.entities[0].skills.as_ref().map(|s| s.len()), Some(2));
+        assert_eq!(
+            inst.entities[0].tool_allowlist.as_ref().map(|s| s.len()),
+            Some(2)
+        );
         assert_eq!(inst.entities[1].id, "reviewer");
         assert_eq!(inst.teams.len(), 1);
         assert_eq!(inst.teams[0].id, "content");

@@ -6,6 +6,12 @@
 
 set -euo pipefail
 
+echo "==> pre-push: building web dashboard (embedded UI)..."
+./scripts/ci/web_build_gate.sh || {
+    echo "FAIL: web dashboard build failed (install Node.js 20+ with npm)."
+    exit 1
+}
+
 echo "==> pre-push: running rust quality gate..."
 ./scripts/ci/rust_quality_gate.sh || {
     echo "FAIL: rust quality gate failed."

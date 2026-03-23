@@ -8,6 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     curl \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 20 — required for scripts/ci/web_build_gate.sh (embedded web dashboard)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy

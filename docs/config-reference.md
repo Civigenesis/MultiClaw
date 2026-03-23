@@ -38,13 +38,15 @@ Used when one instance runs multiple entities (e.g. CEO + workers). In cluster m
 | `default_provider` | (none) | Instance-level default provider; overrides top-level when set |
 | `default_model` | (none) | Instance-level default model; overrides top-level when set |
 | `[instance.ceo]` | (none) | When present, enables the CEO entity (`entity_id=ceo`) for management tools |
-| `[[instance.entities]]` | `[]` | Per-entity config: `id`, optional `provider`, `model`, `team_id`, `role`, `skills` |
+| `[[instance.entities]]` | `[]` | Per-entity config: `id`, optional `provider`, `model`, `team_id`, `role`, `tool_allowlist`, `skill_allowlist` |
 | `[instance.teams]` | `[]` | Team definitions (e.g. for enterprise preset) |
 | `[instance.projects]` | `[]` | Project definitions (for project preset) |
 
 Notes:
 
-- With `[instance]` and `[instance.ceo]`, run as CEO via `--entity ceo` or cron `target = "ceo"` to use `instance_status`, `create_team`, `create_entity`, `assign_task`.
+- With `[instance]` and `[instance.ceo]`, run as CEO via `--entity ceo` or cron `target = "ceo"` to use `instance_status`, `create_team`, `create_entity`, `assign_task`, `ceo_skill_grant`, `clawhub_import_global`, `admin_skill_remove`.
+- **`[[instance.entities]].tool_allowlist`**: runtime executable tool allowlist per entity (must match registered `Tool::name()` values). Use the agent tool `tool_inventory` to list valid assignable names, tiers (`standard` vs `elevated_dev_only` for e.g. `shell`), and tools that are admin-only or CEO-only (not valid in `tool_allowlist`). See `src/tools/entity_skills.rs` for normalization rules.
+- **`[[instance.entities]].skill_allowlist`**: skill package ids (directory names) allowed for the `load_skill` tool; CEO can grant ids via `ceo_skill_grant` after importing to the shared store (see `clawhub_import_global`).
 - Entity-level `provider` / `model` override the instance default for that entity when `--entity <id>` is used.
 - If neither top-level nor `[instance]` sets `default_provider` / `default_model`, the agent run fails with a clear error.
 
@@ -213,7 +215,17 @@ Notes:
 |---|---|---|
 | `open_skills_enabled` | `false` | Opt-in loading/sync of community `open-skills` repository |
 | `open_skills_dir` | unset | Optional local path for `open-skills` (defaults to `$HOME/open-skills` when enabled) |
+| `shared_skills_dir` | unset | Optional path for cluster-wide skill packages; default: `<cluster_root>/shared/skills` when cluster layout is present, else `<workspace>/shared/skills` |
 | `prompt_injection_mode` | `full` | Skill prompt verbosity: `full` (inline instructions/tools) or `compact` (name/description/location only) |
+
+### `[skills.clawhub]` (optional registry)
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Enable ClawHub API tools (`clawhub_search`, `clawhub_explore`); CEO-only tools `clawhub_import_global` require this + CEO entity |
+| `registry_url` | unset | Base URL (default `https://clawhub.ai`) |
+| `token` | unset | Optional bearer token for registry |
+| `timeout_ms` | (client default) | HTTP timeout for registry calls |
 
 Notes:
 

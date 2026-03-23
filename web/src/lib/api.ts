@@ -97,7 +97,7 @@ export async function pair(code: string): Promise<{ token: string }> {
 // ---------------------------------------------------------------------------
 
 export async function getPublicHealth(): Promise<{ require_pairing: boolean; paired: boolean }> {
-  const response = await fetch('/health');
+  const response = await fetch('/health', { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Health check failed (${response.status})`);
   }

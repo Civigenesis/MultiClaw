@@ -134,6 +134,17 @@ Lưu ý:
 |---|---|---|
 | `open_skills_enabled` | `false` | Cho phép tải/đồng bộ kho `open-skills` cộng đồng |
 | `open_skills_dir` | chưa đặt | Đường dẫn cục bộ cho `open-skills` (mặc định `$HOME/open-skills` khi bật) |
+| `shared_skills_dir` | chưa đặt | Thư mục skill toàn cụm (mặc định: `<cluster_root>/shared/skills` hoặc `<workspace>/shared/skills`) |
+| `prompt_injection_mode` | `full` | Độ chi tiết skill trong prompt: `full` hoặc `compact` |
+
+### `[skills.clawhub]` (tùy chọn)
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `false` | Bật công cụ registry ClawHub (`clawhub_search`, `clawhub_explore`); CEO dùng `clawhub_import_global` khi bật |
+| `registry_url` | chưa đặt | Base URL (mặc định `https://clawhub.ai`) |
+| `token` | chưa đặt | Bearer tùy chọn |
+| `timeout_ms` | (mặc định client) | Timeout HTTP |
 
 Lưu ý:
 

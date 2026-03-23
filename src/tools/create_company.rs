@@ -1,5 +1,8 @@
 //! Admin tool: create_company (single-step apply) for cluster instance creation.
 
+use super::entity_skills::{
+    normalize_entity_tool_allowlist_for_company, role_based_default_skills,
+};
 use super::traits::{Tool, ToolResult};
 use crate::config::{Config, EntityConfig, InstanceConfig};
 use crate::instance_registry::InstanceRegistry;
@@ -8,7 +11,6 @@ use async_trait::async_trait;
 use multiclaw::instance_manager;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -83,7 +85,9 @@ struct EntityDraft {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
-    skills: Option<Vec<String>>,
+    tool_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    skill_allowlist: Option<Vec<String>>,
     #[serde(default)]
     identity_md: Option<String>,
     #[serde(default)]
@@ -205,100 +209,7 @@ fn is_ceo_candidate(ed: &EntityDraft) -> bool {
         .unwrap_or(false)
 }
 
-fn role_based_default_skills(role: Option<&str>) -> Option<Vec<String>> {
-    let role = role.unwrap_or("").to_ascii_lowercase();
-    if role.contains("增长") || role.contains("growth") {
-        return Some(vec![
-            "memory_recall".into(),
-            "memory_store".into(),
-            "file_read".into(),
-            "file_write".into(),
-            "web_search_tool".into(),
-            "content_search".into(),
-        ]);
-    }
-    if role.contains("设计") || role.contains("design") {
-        return Some(vec![
-            "file_read".into(),
-            "file_write".into(),
-            "file_edit".into(),
-            "image_info".into(),
-            "memory_recall".into(),
-            "memory_store".into(),
-        ]);
-    }
-    if role.contains("内容") || role.contains("content") {
-        return Some(vec![
-            "file_read".into(),
-            "file_write".into(),
-            "file_edit".into(),
-            "memory_recall".into(),
-            "memory_store".into(),
-            "web_search_tool".into(),
-        ]);
-    }
-    if role.contains("运营") || role.contains("ops") {
-        return Some(vec![
-            "memory_recall".into(),
-            "memory_store".into(),
-            "file_read".into(),
-            "file_write".into(),
-            "schedule".into(),
-        ]);
-    }
-    None
-}
-
 const DEFAULT_TEAM_ID: &str = "unassigned";
-
-fn allowed_entity_skills() -> HashSet<&'static str> {
-    [
-        "file_read",
-        "file_write",
-        "file_edit",
-        "glob_search",
-        "content_search",
-        "memory_store",
-        "memory_recall",
-        "memory_forget",
-        "schedule",
-        "web_search_tool",
-        "web_fetch",
-        "http_request",
-        "image_info",
-        "pdf_read",
-    ]
-    .into_iter()
-    .collect()
-}
-
-fn normalize_entity_skills(skills: Option<Vec<String>>, role: Option<&str>) -> Result<Vec<String>> {
-    let allow = allowed_entity_skills();
-    let source = skills
-        .or_else(|| role_based_default_skills(role))
-        .unwrap_or_else(|| {
-            vec![
-                "file_read".into(),
-                "file_write".into(),
-                "memory_recall".into(),
-            ]
-        });
-    let mut normalized = Vec::new();
-    for s in source {
-        let skill = s.trim().to_string();
-        if skill.is_empty() {
-            continue;
-        }
-        if !allow.contains(skill.as_str()) {
-            bail!(
-                "invalid entity skill '{}': skills must be tool allowlist names (e.g. file_read, memory_recall), not business capability labels",
-                skill
-            );
-        }
-        normalized.push(skill);
-    }
-    Ok(normalized)
-}
 
 fn fallback_entity_identity(company_id: &str, ed: &EntityDraft) -> String {
     let role = ed.role.as_deref().unwrap_or("成员");
@@ -325,7 +236,7 @@ fn fallback_entity_soul(company_id: &str, ed: &EntityDraft) -> String {
 fn fallback_entity_agents(_company_id: &str, ed: &EntityDraft) -> String {
     let role = ed.role.as_deref().unwrap_or("成员");
     let skills = ed
-        .skills
+        .tool_allowlist
         .clone()
         .or_else(|| role_based_default_skills(ed.role.as_deref()))
         .unwrap_or_else(|| {
@@ -357,7 +268,8 @@ fn default_entities_for(preset: Option<&str>, business_domain: Option<&str>) -> 
                 team_id: None,
                 provider: None,
                 model: None,
-                skills: None,
+                tool_allowlist: None,
+                skill_allowlist: None,
                 identity_md: None,
                 soul_md: None,
                 agents_md: None,
@@ -368,7 +280,8 @@ fn default_entities_for(preset: Option<&str>, business_domain: Option<&str>) -> 
                 team_id: None,
                 provider: None,
                 model: None,
-                skills: None,
+                tool_allowlist: None,
+                skill_allowlist: None,
                 identity_md: None,
                 soul_md: None,
                 agents_md: None,
@@ -379,7 +292,8 @@ fn default_entities_for(preset: Option<&str>, business_domain: Option<&str>) -> 
                 team_id: None,
                 provider: None,
                 model: None,
-                skills: None,
+                tool_allowlist: None,
+                skill_allowlist: None,
                 identity_md: None,
                 soul_md: None,
                 agents_md: None,
@@ -393,7 +307,8 @@ fn default_entities_for(preset: Option<&str>, business_domain: Option<&str>) -> 
                 team_id: None,
                 provider: None,
                 model: None,
-                skills: None,
+                tool_allowlist: None,
+                skill_allowlist: None,
                 identity_md: None,
                 soul_md: None,
                 agents_md: None,
@@ -474,19 +389,44 @@ async fn ensure_entity_subdirs(entity_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validate entity skills before instance_create to avoid orphaned instances on failure.
+fn validate_draft_entities(draft: &CompanyDraftFile) -> Result<()> {
+    for ed in &draft.entities {
+        let id = ed.id.trim();
+        if id.is_empty() || is_ceo_candidate(ed) {
+            continue;
+        }
+        normalize_entity_tool_allowlist_for_company(ed.tool_allowlist.clone(), ed.role.as_deref())
+            .with_context(|| format!("entity '{}': invalid skills", id))?;
+    }
+    Ok(())
+}
+
 async fn apply_to_instance(
     cluster_root: &Path,
     company_id: &str,
     draft: &CompanyDraftFile,
 ) -> Result<(u16, PathBuf)> {
+    validate_draft_entities(draft)?;
+
     let preset = draft.preset.as_deref();
-    let entry = instance_manager::instance_create(
+    let entry = match instance_manager::instance_create(
         cluster_root,
         company_id,
         crate::instance_registry::InstanceRole::Normal,
         preset,
     )
-    .await?;
+    .await
+    {
+        Ok(e) => e,
+        Err(e) if e.to_string().contains("already exists") => {
+            let reg = InstanceRegistry::load(cluster_root).await?;
+            reg.get(company_id)
+                .cloned()
+                .context("instance registry inconsistent: 'already exists' but entry not found")?
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     // Update constraints.agent_max in instances.json
     if draft.agent_max.is_some() {
@@ -550,14 +490,18 @@ async fn apply_to_instance(
             .clone()
             .filter(|s| !s.trim().is_empty())
             .or_else(|| Some(DEFAULT_TEAM_ID.to_string()));
-        let skills = normalize_entity_skills(ed.skills.clone(), ed.role.as_deref())?;
+        let tools = normalize_entity_tool_allowlist_for_company(
+            ed.tool_allowlist.clone(),
+            ed.role.as_deref(),
+        )?;
         inst.entities.push(EntityConfig {
             id: id.to_string(),
             provider: ed.provider.clone(),
             model: ed.model.clone(),
             team_id,
             role: ed.role.clone(),
-            skills: Some(skills),
+            tool_allowlist: Some(tools),
+            skill_allowlist: ed.skill_allowlist.clone(),
         });
     }
     cfg.save().await?;
@@ -656,7 +600,8 @@ impl Tool for CreateCompanyTool {
                             "team_id": { "type": "string" },
                             "provider": { "type": "string" },
                             "model": { "type": "string" },
-                            "skills": { "type": "array", "items": { "type": "string" } },
+                            "tool_allowlist": { "type": "array", "items": { "type": "string" }, "description": "Per-entity executable tool names (Tool::name). Call tool_inventory first; elevated_dev_only (e.g. shell) requires dev-like role." },
+                            "skill_allowlist": { "type": "array", "items": { "type": "string" }, "description": "Optional skill package ids (directory names) allowed for load_skill." },
                             "identity_md": { "type": "string" },
                             "soul_md": { "type": "string" },
                             "agents_md": { "type": "string" }

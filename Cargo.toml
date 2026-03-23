@@ -6,6 +6,7 @@ resolver = "2"
 name = "multiclaw"
 version = "0.1.7"
 edition = "2021"
+build = "build.rs"
 authors = ["theonlyhennygod"]
 license = "MIT OR Apache-2.0"
 description = "MultiClaw - Multi-instance AI assistant. The fastest, smallest AI assistant."
@@ -57,6 +58,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 
 # URL encoding for web search
 urlencoding = "2.1"
+
+# ClawHub skill pack zip extraction
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3.14"
 
 # HTML to plain text conversion (web_fetch tool)
 nanohtml2text = "0.2"

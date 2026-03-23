@@ -26,10 +26,14 @@ export interface AuthState {
   isAuthenticated: boolean;
   /** True while the initial auth check is in progress. */
   loading: boolean;
+  /** True when GET /health failed (wrong origin, daemon down, or network). */
+  healthUnreachable: boolean;
   /** Pair with the agent using a pairing code. Stores the token on success. */
   pair: (code: string) => Promise<void>;
   /** Clear the stored token and sign out. */
   logout: () => void;
+  /** Retry the public health check (e.g. after connection error). */
+  retryHealth: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -46,11 +50,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [token, setTokenState] = useState<string | null>(readToken);
   const [authenticated, setAuthenticated] = useState<boolean>(checkAuth);
   const [loading, setLoading] = useState<boolean>(!checkAuth());
+  const [healthUnreachable, setHealthUnreachable] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
 
-  // On mount: check if server requires pairing at all
+  // On mount (and after logout / retry): if no token, ask gateway whether pairing is required.
   useEffect(() => {
-    if (checkAuth()) return; // already have a token, no need to check
+    if (checkAuth()) {
+      setHealthUnreachable(false);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
+    setLoading(true);
+    setHealthUnreachable(false);
+
     getPublicHealth()
       .then((health) => {
         if (cancelled) return;
@@ -59,15 +73,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
       })
       .catch(() => {
-        // health endpoint unreachable — fall back to showing pairing dialog
+        if (!cancelled) setHealthUnreachable(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryNonce]);
 
   // Keep state in sync if localStorage is changed in another tab
   useEffect(() => {
@@ -82,25 +97,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => window.removeEventListener('storage', handler);
   }, []);
 
-  const pair = useCallback(async (code: string): Promise<void> => {
+  const retryHealth = useCallback(() => {
+    setRetryNonce((n) => n + 1);
+  }, []);
+
+  const pair = useCallback(async (code: string) => {
     const { token: newToken } = await apiPair(code);
     writeToken(newToken);
     setTokenState(newToken);
     setAuthenticated(true);
+    setHealthUnreachable(false);
   }, []);
 
   const logout = useCallback((): void => {
     removeToken();
     setTokenState(null);
     setAuthenticated(false);
+    setHealthUnreachable(false);
+    setLoading(true);
+    setRetryNonce((n) => n + 1);
   }, []);
 
   const value: AuthState = {
     token,
     isAuthenticated: authenticated,
     loading,
+    healthUnreachable,
     pair,
     logout,
+    retryHealth,
   };
 
   return React.createElement(AuthContext.Provider, { value }, children);

@@ -174,6 +174,12 @@ Use `skills audit` to manually validate a candidate skill directory (or an insta
 
 Skill manifests (`SKILL.toml`) support `prompts` and `[[tools]]`; both are injected into the agent system prompt at runtime, so the model can follow skill instructions without manually reading skill files.
 
+### Runtime agent tools (LLM tool calls)
+
+These are not CLI subcommands; they are registered for the agent loop when enabled.
+
+- **`tool_inventory`** — Query the canonical catalog for **`[[instance.entities]].skills`**: tool names, descriptions, assignment tier (`standard` vs `elevated_dev_only` for high-risk tools such as `shell`), and which tools are admin-only or CEO-only (not valid entity skills). Optional JSON parameter: `scope` = `assignable` (entity skills only) or `full` (includes policy notes and non-assignable tools). Always available even when an entity uses a restricted skills allowlist.
+
 ### `migrate`
 
 - `multiclaw migrate openclaw [--source <path>] [--dry-run]`

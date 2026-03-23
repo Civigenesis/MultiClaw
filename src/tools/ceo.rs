@@ -1,7 +1,10 @@
-//! CEO-only tools for multi-entity instances: create_team, create_entity, assign_task, instance_status.
+//! CEO-only tools for multi-entity instances: create_team, create_entity, assign_task, instance_status,
+//! ceo_skill_grant, clawhub_import_global, admin_skill_remove.
 //! Exposed only when the current run target is the CEO entity (see phase 2d wiring).
 //! create_team and create_entity persist to config.toml and create entity/team workspace dirs.
 
+use super::entity_skills::normalize_entity_tool_allowlist_for_entity;
+use super::skill_pack::{AdminSkillRemoveTool, ClawhubImportGlobalTool};
 use super::traits::{Tool, ToolResult};
 use crate::config::{Config, EntityConfig, TeamConfig};
 use crate::entity::{entity_workspace_dir, team_workspace_dir, EntityPool, CEO_ENTITY_ID};
@@ -9,7 +12,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -123,7 +125,9 @@ struct CreateEntityArgs {
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
-    skills: Option<Vec<String>>,
+    tool_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    skill_allowlist: Option<Vec<String>>,
     #[serde(default)]
     identity_md: Option<String>,
     #[serde(default)]
@@ -133,95 +137,6 @@ struct CreateEntityArgs {
 }
 
 const DEFAULT_TEAM_ID: &str = "unassigned";
-
-fn allowed_entity_skills() -> HashSet<&'static str> {
-    [
-        "file_read",
-        "file_write",
-        "file_edit",
-        "glob_search",
-        "content_search",
-        "memory_store",
-        "memory_recall",
-        "memory_forget",
-        "schedule",
-        "web_search_tool",
-        "web_fetch",
-        "http_request",
-        "image_info",
-        "pdf_read",
-    ]
-    .into_iter()
-    .collect()
-}
-
-fn role_based_default_skills(role: Option<&str>) -> Vec<String> {
-    let role = role.unwrap_or("").to_ascii_lowercase();
-    if role.contains("增长") || role.contains("growth") {
-        return vec![
-            "memory_recall".into(),
-            "memory_store".into(),
-            "file_read".into(),
-            "file_write".into(),
-            "web_search_tool".into(),
-            "content_search".into(),
-        ];
-    }
-    if role.contains("设计") || role.contains("design") {
-        return vec![
-            "file_read".into(),
-            "file_write".into(),
-            "file_edit".into(),
-            "image_info".into(),
-            "memory_recall".into(),
-            "memory_store".into(),
-        ];
-    }
-    if role.contains("内容") || role.contains("content") {
-        return vec![
-            "file_read".into(),
-            "file_write".into(),
-            "file_edit".into(),
-            "memory_recall".into(),
-            "memory_store".into(),
-            "web_search_tool".into(),
-        ];
-    }
-    if role.contains("运营") || role.contains("ops") {
-        return vec![
-            "memory_recall".into(),
-            "memory_store".into(),
-            "file_read".into(),
-            "file_write".into(),
-            "schedule".into(),
-        ];
-    }
-    vec![
-        "file_read".into(),
-        "file_write".into(),
-        "memory_recall".into(),
-    ]
-}
-
-fn normalize_entity_skills(skills: Option<Vec<String>>, role: Option<&str>) -> Result<Vec<String>> {
-    let allow = allowed_entity_skills();
-    let result = skills.unwrap_or_else(|| role_based_default_skills(role));
-    let mut normalized = Vec::new();
-    for s in result {
-        let skill = s.trim().to_string();
-        if skill.is_empty() {
-            continue;
-        }
-        if !allow.contains(skill.as_str()) {
-            anyhow::bail!(
-                "invalid entity skill '{}': skills must be tool allowlist names (e.g. file_read, memory_recall), not business capability labels",
-                skill
-            );
-        }
-        normalized.push(skill);
-    }
-    Ok(normalized)
-}
 
 #[async_trait]
 impl Tool for CreateEntityTool {
@@ -242,7 +157,8 @@ impl Tool for CreateEntityTool {
                 "model": { "type": "string", "description": "Optional model override" },
                 "team_id": { "type": "string", "description": "Optional team id" },
                 "role": { "type": "string", "description": "Optional role" },
-                "skills": { "type": "array", "items": { "type": "string" }, "description": "Optional skills allowlist" },
+                "tool_allowlist": { "type": "array", "items": { "type": "string" }, "description": "Optional per-entity executable tool names. Call tool_inventory first; elevated_dev_only tools (e.g. shell) require a dev/engineering-like role." },
+                "skill_allowlist": { "type": "array", "items": { "type": "string" }, "description": "Optional skill package ids for load_skill." },
                 "identity_md": { "type": "string", "description": "Optional explicit IDENTITY.md content for the new entity" },
                 "soul_md": { "type": "string", "description": "Optional explicit SOUL.md content for the new entity" },
                 "agents_md": { "type": "string", "description": "Optional explicit AGENTS.md content for the new entity" }
@@ -311,7 +227,10 @@ impl Tool for CreateEntityTool {
 
         let team_id = args.team_id.filter(|s| !s.trim().is_empty());
         let team_id = Some(team_id.unwrap_or_else(|| DEFAULT_TEAM_ID.to_string()));
-        let skills = match normalize_entity_skills(args.skills, args.role.as_deref()) {
+        let tools = match normalize_entity_tool_allowlist_for_entity(
+            args.tool_allowlist,
+            args.role.as_deref(),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 return Ok(ToolResult {
@@ -327,7 +246,8 @@ impl Tool for CreateEntityTool {
             model: args.model,
             team_id,
             role: args.role,
-            skills: Some(skills),
+            tool_allowlist: Some(tools),
+            skill_allowlist: args.skill_allowlist,
         };
         instance.entities.push(entity_config.clone());
         config
@@ -526,6 +446,125 @@ impl Tool for AssignTaskTool {
     }
 }
 
+/// Grants a skill package id to an entity's `skill_allowlist` (CEO only). Persists to `config.toml` and updates the in-memory pool.
+pub struct CeoSkillGrantTool {
+    entity_pool: Option<Arc<EntityPool>>,
+    config_path: PathBuf,
+}
+
+impl CeoSkillGrantTool {
+    pub fn new(entity_pool: Option<Arc<EntityPool>>, config_path: PathBuf) -> Self {
+        Self {
+            entity_pool,
+            config_path,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CeoSkillGrantArgs {
+    entity_id: String,
+    skill_id: String,
+}
+
+#[async_trait]
+impl Tool for CeoSkillGrantTool {
+    fn name(&self) -> &str {
+        "ceo_skill_grant"
+    }
+
+    fn description(&self) -> &str {
+        "Grant a skill package id (directory name) to an entity's skill_allowlist so load_skill can read it. CEO only; persists to [[instance.entities]]."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "entity_id": { "type": "string", "description": "Target entity id (not reserved id misuse)" },
+                "skill_id": { "type": "string", "description": "Skill package id / slug (single path segment)" }
+            },
+            "required": ["entity_id", "skill_id"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        let pool: &Arc<EntityPool> = match &self.entity_pool {
+            Some(p) => p,
+            None => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some("multi-entity mode not enabled".to_string()),
+                });
+            }
+        };
+        let args: CeoSkillGrantArgs = serde_json::from_value(args)
+            .map_err(|e| anyhow::anyhow!("invalid ceo_skill_grant arguments: {}", e))?;
+        let entity_id = args.entity_id.trim();
+        let skill_id = args.skill_id.trim();
+        if entity_id.is_empty() || skill_id.is_empty() {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("entity_id and skill_id are required".into()),
+            });
+        }
+        if skill_id.contains("..") || skill_id.contains('/') || skill_id.contains('\\') {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("skill_id must be a single package id (no path separators)".into()),
+            });
+        }
+        if pool.get(entity_id).is_none() {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("unknown entity '{entity_id}'")),
+            });
+        }
+
+        let mut config = Config::load_from_path(&self.config_path)
+            .await
+            .context("load config for ceo_skill_grant")?;
+        let instance = config
+            .instance
+            .as_mut()
+            .context("instance config missing")?;
+        let entity_cfg = instance
+            .entities
+            .iter_mut()
+            .find(|e| e.id == entity_id)
+            .context("entity not found in config")?;
+        let mut list = entity_cfg.skill_allowlist.take().unwrap_or_default();
+        if !list.iter().any(|s| s == skill_id) {
+            list.push(skill_id.to_string());
+        }
+        entity_cfg.skill_allowlist = Some(list);
+        config
+            .save()
+            .await
+            .context("save config after ceo_skill_grant")?;
+
+        match pool.merge_skill_allowlist(entity_id, &[skill_id.to_string()]) {
+            Ok(()) => Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Granted skill '{skill_id}' to entity '{entity_id}' (skill_allowlist updated)."
+                ),
+                error: None,
+            }),
+            Err(e) => Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+}
+
 /// Build CEO tools. Only include when entity_pool is present (caller filters by current_entity_id == ceo in phase 2d).
 /// config_path and workspace_dir are used to persist create_team/create_entity to config and create entity/team workspace dirs.
 pub fn ceo_tools(
@@ -533,6 +572,7 @@ pub fn ceo_tools(
     agent_max: Option<u32>,
     config_path: PathBuf,
     workspace_dir: PathBuf,
+    config: Arc<Config>,
 ) -> Vec<Arc<dyn Tool>> {
     let config_path_opt = Some(config_path.clone());
     vec![
@@ -546,8 +586,11 @@ pub fn ceo_tools(
             config_path.clone(),
             workspace_dir.clone(),
         )),
-        Arc::new(CreateTeamTool::new(config_path, workspace_dir)),
-        Arc::new(AssignTaskTool::new(entity_pool)),
+        Arc::new(CreateTeamTool::new(config_path.clone(), workspace_dir)),
+        Arc::new(AssignTaskTool::new(entity_pool.clone())),
+        Arc::new(CeoSkillGrantTool::new(entity_pool.clone(), config_path)),
+        Arc::new(ClawhubImportGlobalTool::new(config.clone())),
+        Arc::new(AdminSkillRemoveTool::new(config)),
     ]
 }
 
@@ -580,7 +623,8 @@ mod tests {
                     model: None,
                     team_id: None,
                     role: None,
-                    skills: None,
+                    tool_allowlist: None,
+                    skill_allowlist: None,
                 }],
                 teams: vec![],
                 projects: vec![],

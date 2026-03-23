@@ -78,6 +78,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: runner.os != 'Windows'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build embedded web dashboard
+        shell: bash
+        run: bash ./scripts/ci/web_build_gate.sh
+
       - name: Install cross compiler
         if: matrix.cross_compiler
         run: |

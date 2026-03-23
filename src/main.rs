@@ -55,6 +55,7 @@ mod channels;
 mod rag {
     pub use multiclaw::rag::*;
 }
+mod clawhub;
 mod config;
 mod cost;
 mod cron;
