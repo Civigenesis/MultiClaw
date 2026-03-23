@@ -30,3 +30,6 @@ venv/
 *.pem
 credentials.json
 .worktrees/
+
+# Local release packaging (see scripts/ci and dist/ tarballs)
+/dist/
